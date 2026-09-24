@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""scholia-eval — score scholia's retrieval against a labelled set.
+
+Two measurements, both run on the live vault:
+
+  queries   <vault>/eval/queries.tsv: a question and the notes that answer it
+            (tab-separated: question, then space-separated slugs).
+            Recall@10 and MRR@10 for each retrieval method the loaded
+            engine offers: `search`, `related "<free text>"`, and, when
+            fastembed is installed, `semantic` and `related --semantic`.
+  related   For every notes/ file, `related` with the graph term switched
+            off (text + tags only), scored against the note's own in-vault
+            links. Links are held out of the score, so they are a fair
+            label. Also reports hub share: the fraction of top-8 slots held
+            by nodes with degree > 50, with the graph term on.
+
+`--impl` loads another engine file (e.g. an old revision from
+`git show <rev>:bin/scholia`) so before/after runs use one scorer.
+`--pool` prints each query's pooled top-10 with the gold marked, for
+extending or re-judging the labels.
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+HOME = Path(__file__).resolve().parent.parent
+K = 10
+REL_K = 8
+HUB_DEGREE = 50
+
+
+def load_impl(path, vault=None):
+    """Load an engine file (no .py suffix needed) pointed at `vault`."""
+    if vault:
+        os.environ["VAULT"] = str(vault)  # older engines read $VAULT at import
+    loader = importlib.machinery.SourceFileLoader("scholia_impl", str(path))
+    spec = importlib.util.spec_from_loader("scholia_impl", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    if vault and hasattr(mod, "set_vault"):
+        mod.set_vault(Path(vault))
+    return mod
+
+
+def load_queries(path):
+    out = []
+    for line in Path(path).read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        q, gold = line.split("\t")
+        out.append((q, set(gold.split())))
+    return out
+
+
+def slug_of(db, nid):
+    return db.execute("SELECT slug FROM notes WHERE id=?", (nid,)).fetchone()[0]
+
+
+def m_search(v, db, q):
+    """cmd_search's ranking (older revisions: all terms, else any term)."""
+    if hasattr(v, "_search"):
+        return [h[0] for h in v._search(db, q, K)[0]]
+    for op in ("AND", "OR"):
+        expr = v.fts_query(q, op)
+        if not expr:
+            return []
+        rows = db.execute(
+            "SELECT n.slug FROM notes_fts JOIN notes n ON n.id=notes_fts.rowid "
+            "WHERE notes_fts MATCH ? "
+            "ORDER BY bm25(notes_fts,8.0,12.0,6.0,4.0,1.0) LIMIT ?",
+            (expr, K)).fetchall()
+        if rows:
+            return [r[0] for r in rows]
+    return []
+
+
+def m_related(v, db, q):
+    return [m[0] for _, _, m in v._related(db, None, q, set(), K)]
+
+
+def m_related_sem(v, db, q):
+    return [m[0] for _, _, m in v._related(db, None, q, set(), K,
+                                           semantic=True)]
+
+
+def methods(v):
+    out = [("search", m_search), ("related", m_related)]
+    if hasattr(v, "load_embedder") and v.load_embedder() is not None:
+        model = v.load_embedder()
+
+        def m_semantic(v, db, q):
+            best = v.semantic_scores(db, model, q)
+            top = sorted(best.items(), key=lambda x: -x[1][0])[:K]
+            return [slug_of(db, nid) for nid, _ in top]
+        out += [("semantic", m_semantic), ("related+sem", m_related_sem)]
+    return out
+
+
+def score(ranked, gold):
+    rec = len(gold & set(ranked[:K])) / len(gold)
+    rr = next((1 / (i + 1) for i, s in enumerate(ranked[:K]) if s in gold), 0)
+    return rec, rr
+
+
+def run_queries(v, db, queries, verbose):
+    ms = methods(v)
+    tot = {name: [0.0, 0.0] for name, _ in ms}
+    for q, gold in queries:
+        line = []
+        for name, fn in ms:
+            rec, rr = score(fn(v, db, q), gold)
+            tot[name][0] += rec
+            tot[name][1] += rr
+            line.append(f"{name} R={rec:.2f}")
+        if verbose:
+            print(f"  {q[:60]:<60} " + "  ".join(line))
+    n = len(queries)
+    print(f"\nqueries ({n}, gold notes {sum(len(g) for _, g in queries)}):")
+    print(f"  {'method':<12} {'recall@10':>9} {'MRR@10':>7}")
+    for name, (r, m) in tot.items():
+        print(f"  {name:<12} {r / n:9.3f} {m / n:7.3f}")
+    return {name: (r / n, m / n) for name, (r, m) in tot.items()}
+
+
+def degrees(db):
+    deg = {}
+    for (nid,) in db.execute("SELECT id FROM notes"):
+        deg[nid] = 0
+    for sid, c in db.execute("SELECT src_id, COUNT(*) FROM links "
+                             "WHERE resolved=1 GROUP BY src_id"):
+        deg[sid] += c
+    for did, c in db.execute("SELECT n.id, COUNT(*) FROM links l "
+                             "JOIN notes n ON n.slug=l.dst GROUP BY n.id"):
+        deg[did] += c
+    return deg
+
+
+def run_related(v, db):
+    deg = degrees(db)
+    hubs = {nid for nid, d in deg.items() if d > HUB_DEGREE}
+    notes = db.execute("SELECT id, slug, title, tldr FROM notes "
+                       "WHERE kind='notes'").fetchall()
+    rec_sum = n_scored = hub_slots = slots = 0
+    for nid, slug, title, tldr in notes:
+        tags = v.tags_of(db, nid)
+        text = f"{title} {tldr}"
+        gold = {r[0] for r in db.execute(
+            "SELECT l.dst FROM links l JOIN notes n ON n.slug=l.dst "
+            "WHERE l.src_id=? AND l.resolved=1", (nid,))}
+        gold |= {r[0] for r in db.execute(
+            "SELECT n.slug FROM links l JOIN notes n ON n.id=l.src_id "
+            "WHERE l.dst=?", (slug,))}
+        gold.discard(slug)
+        if gold:
+            top = [m[0] for _, _, m in
+                   v._related(db, None, text, tags, REL_K, exclude_slug=slug)]
+            rec_sum += len(gold & set(top)) / min(len(gold), REL_K)
+            n_scored += 1
+        full = v._related(db, nid, text, tags, REL_K, exclude_slug=slug)
+        hub_slots += sum(1 for n2, _, _ in full if n2 in hubs)
+        slots += len(full)
+    print(f"\nrelated over {len(notes)} notes/ files "
+          f"({len(hubs)} hub nodes with degree > {HUB_DEGREE}):")
+    print(f"  link recall@{REL_K}, text + tags only: {rec_sum / n_scored:.3f}"
+          f"  ({n_scored} notes with links)")
+    print(f"  hub share of top-{REL_K} slots, full score: "
+          f"{hub_slots}/{slots} = {hub_slots / slots:.3f}")
+    return rec_sum / n_scored, hub_slots / slots
+
+
+def run_pool(v, db, queries):
+    ms = methods(v)
+    for q, gold in queries:
+        print(f"\n## {q}")
+        pool = {}
+        for name, fn in ms:
+            for rank, s in enumerate(fn(v, db, q)):
+                pool.setdefault(s, []).append(f"{name}#{rank + 1}")
+        for s, where in pool.items():
+            mark = "GOLD" if s in gold else "    "
+            print(f"  {mark} {s:<60} {' '.join(where)}")
+        for s in gold - set(pool):
+            print(f"  GOLD {s:<60} (retrieved by no method)")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="vaulteval.py")
+    p.add_argument("--vault", help="vault directory (default: as scholia)")
+    p.add_argument("--impl", default=str(HOME / "bin/scholia"))
+    p.add_argument("--queries",
+                   help="labelled set (default: <vault>/eval/queries.tsv)")
+    p.add_argument("--pool", action="store_true")
+    p.add_argument("-v", "--verbose", action="store_true")
+    args = p.parse_args()
+    core = load_impl(HOME / "bin/scholia")
+    vault = core.find_vault(args.vault)
+    if vault is None:
+        print("no vault found: pass --vault DIR or set SCHOLIA_VAULT",
+              file=sys.stderr)
+        return 2
+    v = load_impl(args.impl, vault)
+    db = v.connect()
+    queries = load_queries(args.queries or vault / "eval/queries.tsv")
+    print(f"impl: {args.impl}")
+    if args.pool:
+        run_pool(v, db, queries)
+        return 0
+    run_queries(v, db, queries, args.verbose)
+    run_related(v, db)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,4 @@
+# scholia config for this vault. Optional; delete it if unused.
+# Directories of other markdown notes this vault may [[wikilink]] into (e.g. an
+# agent's memory folder). Links resolving there are not reported as dangling.
+memory_dirs = []

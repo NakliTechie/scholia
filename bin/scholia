@@ -1,0 +1,1232 @@
+#!/usr/bin/env python3
+"""scholia — a derived, throwaway search index over a markdown vault.
+
+The markdown files are canonical. This database is a cache: it is rebuilt from
+scratch on every run that needs it, and it is gitignored. If it is ever deleted,
+lost, or suspected wrong, the fix is always `scholia build`.
+
+Which vault: `--vault DIR`, else $SCHOLIA_VAULT, else the nearest directory at
+or above the working directory that holds both sources/ and notes/.
+
+Stdlib only (sqlite3 with FTS5). No dependencies, no daemon, no incremental
+indexing -- a full rebuild of the whole vault takes well under a second, and
+that is what makes the whole class of staleness bugs impossible.
+
+One optional layer breaks the stdlib rule: `semantic` (and `--semantic` on
+related/orient) embeds passages with a frozen all-MiniLM-L6-v2 via fastembed.
+Its vectors live in a second cache, .scholia.emb.db, keyed by passage hash, so
+only changed passages are re-embedded. Without fastembed installed, `semantic`
+exits with an install hint and every other command runs unchanged.
+"""
+
+import argparse
+import difflib
+import hashlib
+import math
+import os
+import re
+import sqlite3
+import sys
+import time
+from collections import defaultdict
+from pathlib import Path
+
+HOME = Path(__file__).resolve().parent.parent  # the scholia checkout
+EMB_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_DIR = Path(os.environ.get(
+    "SCHOLIA_MODEL_DIR", Path.home() / ".cache/scholia/models"))
+REQS = HOME / "requirements-semantic.txt"
+SEMANTIC_HINT = (
+    f"semantic search needs fastembed (pinned in {REQS})."
+    "\n  run it through uv, no install needed:\n"
+    f"    uv run --no-project --with-requirements {REQS} "
+    f"{HOME / 'bin/scholia'} semantic <text>\n"
+    f"  or: pip install -r {REQS}")
+CONTENT_DIRS = ("sources", "notes", "topics")
+
+# Frontmatter keys we lift into columns. Everything else is ignored.
+SCALARS = (
+    "title", "url", "author", "source_type", "captured", "published",
+    "domain", "status", "rating", "created", "updated", "type",
+    "platform", "session_date", "capture_mode",
+)
+
+WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
+
+# Passage-level anchors (Obsidian syntax). A key claim in a source note ends in
+# a block ID -- `- claim text ^claim-id` -- and a note cites that passage as
+# `[[source#^claim-id]]`. `[[source#Heading]]` targets a section. WFM's largest
+# ablation (arXiv:2609.18182, Fig. 5) is dropping passage nodes: -7.5 to -7.7
+# points. File-level links alone are that ablated graph.
+BLOCK_ID = re.compile(r"\s\^([A-Za-z0-9-]+)[ \t]*$", re.M)
+HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", re.M)
+
+# A vault may wikilink into another namespace of markdown files -- e.g. an
+# agent's memory directory ([[cairn]] -> project_cairn.md). Those are
+# cross-namespace references, not broken links. List such directories in
+# <vault>/scholia.toml:  memory_dirs = ["~/.claude/projects/<slug>/memory"]
+MEMORY_DIRS = []
+
+
+def find_vault(explicit=None):
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    if os.environ.get("SCHOLIA_VAULT"):
+        return Path(os.environ["SCHOLIA_VAULT"]).expanduser().resolve()
+    here = Path.cwd().resolve()
+    for d in (here, *here.parents):
+        if (d / "sources").is_dir() and (d / "notes").is_dir():
+            return d
+    return None
+
+
+def set_vault(path):
+    """Point every module-level path at one vault and read its config."""
+    global VAULT, DB_PATH, EMB_PATH, MEMORY_DIRS
+    VAULT = path or Path.cwd()
+    DB_PATH = VAULT / ".scholia.db"
+    EMB_PATH = VAULT / ".scholia.emb.db"
+    MEMORY_DIRS = []
+    conf = VAULT / "scholia.toml"
+    if conf.is_file():
+        import tomllib
+        cfg = tomllib.loads(conf.read_text())
+        MEMORY_DIRS = [Path(d).expanduser() for d in cfg.get("memory_dirs", [])]
+
+
+set_vault(find_vault())
+
+
+def memory_slugs():
+    return {p.stem for d in MEMORY_DIRS if d.is_dir() for p in d.glob("*.md")}
+
+
+def canon_target(dst):
+    """`[[topics/foo]]` and `[[foo.md]]` name the same note as `[[foo]]`."""
+    t = dst.strip()
+    for pre in ("sources/", "notes/", "topics/", "./"):
+        if t.startswith(pre):
+            t = t[len(pre):]
+    if t.endswith(".md"):
+        t = t[:-3]
+    return t
+
+
+def split_target(dst):
+    """`slug#^block` -> ("slug", "^block"); `slug#Heading` -> ("slug",
+    "Heading"); `#^block` (same file) -> ("", "^block")."""
+    file, _, frag = dst.strip().partition("#")
+    return file.strip(), frag.strip()
+
+
+def norm_heading(h):
+    return " ".join(h.lower().split())
+
+
+def anchors_of(body):
+    """Block IDs (as `^id`) and normalised heading texts in a note body."""
+    out = {"^" + m.group(1) for m in BLOCK_ID.finditer(body)}
+    out |= {norm_heading(m.group(1)) for m in HEADING.finditer(body)}
+    return out
+
+
+def frag_resolves(frag, anchors):
+    if frag.startswith("^"):
+        return frag in anchors
+    # Obsidian allows nested heading paths, `#Outer#Inner`; the last one names
+    # the section.
+    return norm_heading(frag.split("#")[-1]) in anchors
+
+
+def resolves_to_memory(dst, mem):
+    """Try the naming variants the vault actually uses for memory refs."""
+    u = dst.replace("-", "_")
+    return any(c in mem for c in
+               (dst, u, f"project_{dst}", f"project_{u}",
+                f"user_{u}", f"feedback_{u}", f"reference_{u}"))
+TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.\-]*")
+STOPWORDS = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "for", "on", "with", "is",
+    "it", "its", "as", "at", "by", "from", "that", "this", "was", "are", "be",
+    "what", "how", "why", "when", "which", "who", "not", "but", "can", "do",
+}
+
+
+# --------------------------------------------------------------------------
+# parsing
+# --------------------------------------------------------------------------
+
+def parse_frontmatter(text):
+    """Tolerant reader for the vault's limited YAML subset.
+
+    Handles: `key: value`, quoted values, inline `tags: [a, b]`, empty values.
+    Deliberately not a YAML parser -- the vault's schema is fixed and small,
+    and a real parser would be a dependency for no gain.
+    """
+    meta, tags = {}, []
+    if not text.startswith("---"):
+        return meta, tags, text
+    end = text.find("\n---", 3)
+    if end == -1:
+        return meta, tags, text
+    block, body = text[3:end], text[end + 4:]
+    for line in block.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key, val = key.strip(), val.strip()
+        if key == "tags":
+            tags = [t.strip().strip("\"'") for t in val.strip("[]").split(",")]
+            tags = [t for t in tags if t]
+        elif key in SCALARS:
+            meta[key] = val.strip("\"'")
+    return meta, tags, body
+
+
+def section(body, heading):
+    """Return the text under a `## heading` up to the next `##`."""
+    pat = re.compile(rf"^##\s+{re.escape(heading)}\s*$(.*?)(?=^##\s|\Z)",
+                     re.M | re.S)
+    m = pat.search(body)
+    return m.group(1).strip() if m else ""
+
+
+def normalize_url(url):
+    """Collapse the cosmetic differences that make the same link look new."""
+    if not url:
+        return ""
+    u = url.strip().lower()
+    u = re.sub(r"^https?://", "", u)
+    u = re.sub(r"^www\.", "", u)
+    u = u.split("#")[0]
+    if "?" in u:
+        base, _, qs = u.partition("?")
+        keep = [p for p in qs.split("&")
+                if p and not p.startswith(("utm_", "ref=", "fbclid", "gclid"))]
+        u = base + ("?" + "&".join(keep) if keep else "")
+    return u.rstrip("/")
+
+
+# --------------------------------------------------------------------------
+# build
+# --------------------------------------------------------------------------
+
+SCHEMA = """
+DROP TABLE IF EXISTS notes;
+DROP TABLE IF EXISTS tags;
+DROP TABLE IF EXISTS links;
+DROP TABLE IF EXISTS notes_fts;
+DROP TABLE IF EXISTS linkstyle;
+DROP TABLE IF EXISTS fraglinks;
+CREATE TABLE notes (
+  id INTEGER PRIMARY KEY, path TEXT, kind TEXT, slug TEXT,
+  title TEXT, url TEXT, url_norm TEXT, author TEXT, source_type TEXT,
+  captured TEXT, published TEXT, domain TEXT, status TEXT, rating TEXT,
+  created TEXT, updated TEXT, type TEXT, tldr TEXT, body TEXT, words INTEGER
+);
+CREATE TABLE tags (note_id INTEGER, tag TEXT);
+CREATE TABLE links (src_id INTEGER, dst TEXT, resolved INTEGER);
+CREATE TABLE linkstyle (src_id INTEGER, raw TEXT);
+-- one row per passage/section-level link; the file part is also in `links`
+CREATE TABLE fraglinks (src_id INTEGER, dst TEXT, frag TEXT, ok INTEGER);
+CREATE VIRTUAL TABLE notes_fts USING fts5(slug, title, tags, tldr, body);
+CREATE INDEX idx_tags_tag ON tags(tag);
+CREATE INDEX idx_links_dst ON links(dst);
+CREATE INDEX idx_notes_slug ON notes(slug);
+CREATE INDEX idx_notes_urlnorm ON notes(url_norm);
+"""
+
+
+def build(verbose=True):
+    """Build into a private temp file, then rename it over .scholia.db. A
+    concurrent run keeps reading the file it opened; nobody sees a half-built
+    index or has its tables dropped mid-query."""
+    tmp = DB_PATH.with_name(f"{DB_PATH.name}.{os.getpid()}.tmp")
+    try:
+        db = _build_into(tmp, verbose)
+        db.close()
+        os.replace(tmp, DB_PATH)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return sqlite3.connect(DB_PATH)
+
+
+def _build_into(path, verbose):
+    t0 = time.time()
+    path.unlink(missing_ok=True)
+    db = sqlite3.connect(path)
+    db.executescript(SCHEMA)
+
+    files = []
+    for kind in CONTENT_DIRS:
+        d = VAULT / kind
+        if d.is_dir():
+            files += [(kind, p) for p in sorted(d.glob("*.md"))]
+
+    parsed = []
+    for kind, path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        parsed.append((kind, path, *parse_frontmatter(text)))
+    slugs = {p.stem for _, p in files}
+    anchors = {path.stem: anchors_of(body)
+               for _, path, _, _, body in parsed}
+    mem = memory_slugs()
+    rows = 0
+    for kind, path, meta, tags, body in parsed:
+        slug = path.stem
+        # Block IDs are addressing, not content: keep them out of the FTS text.
+        indexed = BLOCK_ID.sub("", body)
+        tldr = section(indexed, "TL;DR")
+        url = meta.get("url", "")
+        cur = db.execute(
+            "INSERT INTO notes (path,kind,slug,title,url,url_norm,author,"
+            "source_type,captured,published,domain,status,rating,created,"
+            "updated,type,tldr,body,words) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,"
+            "?,?,?,?,?,?)",
+            (str(path.relative_to(VAULT)), kind, slug,
+             meta.get("title", slug), url, normalize_url(url),
+             meta.get("author", ""), meta.get("source_type", ""),
+             meta.get("captured", ""), meta.get("published", ""),
+             meta.get("domain", "knowledge" if kind != "topics" else ""),
+             meta.get("status", ""), meta.get("rating", ""),
+             meta.get("created", ""), meta.get("updated", ""),
+             meta.get("type", ""), tldr, body, len(body.split())))
+        nid = cur.lastrowid
+        db.executemany("INSERT INTO tags VALUES (?,?)",
+                       [(nid, t) for t in tags])
+        seen, seen_frag, style = set(), set(), set()
+        for m in WIKILINK.finditer(body):
+            file, frag = split_target(m.group(1))
+            dst = canon_target(file) if file else slug
+            if frag and (dst, frag) not in seen_frag:
+                seen_frag.add((dst, frag))
+                ok = int(dst in anchors and frag_resolves(frag, anchors[dst]))
+                db.execute("INSERT INTO fraglinks VALUES (?,?,?,?)",
+                           (nid, dst, frag, ok))
+            if file and dst != file:
+                style.add(file)
+            if not file or dst in seen:  # same-file anchors are not edges
+                continue
+            seen.add(dst)
+            if dst in slugs:
+                res = 1
+            elif resolves_to_memory(dst, mem):
+                res = 2
+            else:
+                res = 0
+            db.execute("INSERT INTO links VALUES (?,?,?)", (nid, dst, res))
+        db.executemany("INSERT INTO linkstyle VALUES (?,?)",
+                       [(nid, f) for f in sorted(style)
+                        if canon_target(f) in slugs
+                        or resolves_to_memory(canon_target(f), mem)])
+        db.execute("INSERT INTO notes_fts (rowid,slug,title,tags,tldr,body) "
+                   "VALUES (?,?,?,?,?,?)",
+                   (nid, slug.replace("-", " "), meta.get("title", ""),
+                    " ".join(tags), tldr, indexed))
+        rows += 1
+
+    db.commit()
+    if verbose:
+        ms = (time.time() - t0) * 1000
+        nt = db.execute("SELECT COUNT(DISTINCT tag) FROM tags").fetchone()[0]
+        nl = db.execute("SELECT COUNT(*) FROM links").fetchone()[0]
+        print(f"built {DB_PATH.name}: {rows} notes · {nt} tags · {nl} links "
+              f"· {ms:.0f}ms")
+    return db
+
+
+def connect(rebuild=True):
+    """Always rebuild by default. The index is never trusted to be current."""
+    if rebuild or not DB_PATH.exists():
+        return build(verbose=False)
+    return sqlite3.connect(DB_PATH)
+
+
+# --------------------------------------------------------------------------
+# query helpers
+# --------------------------------------------------------------------------
+
+# British <-> American spellings. The vault mixes both ("licence" in a
+# question, "license" in the note), and FTS matches exact tokens. Each rule is
+# a suffix swap applied in both directions to tokens longer than 5 chars; a
+# non-word variant ("otherwize") costs nothing because nothing matches it.
+SPELLING = (("licence", "license"), ("defence", "defense"),
+            ("isation", "ization"), ("ising", "izing"), ("ised", "ized"),
+            ("ise", "ize"), ("yse", "yze"), ("our", "or"), ("tre", "ter"),
+            ("ogue", "og"))
+
+
+def spelling_variants(tok):
+    out = set()
+    if len(tok) > 5:
+        for a, b in SPELLING:
+            for x, y in ((a, b), (b, a)):
+                if tok.endswith(x):
+                    out.add(tok[:-len(x)] + y)
+    out.discard(tok)
+    return sorted(out)
+
+
+def fts_query(text, op="AND"):
+    """Turn free text into a safe FTS5 expression.
+
+    Every token is quoted, so user punctuation can never be read as an
+    FTS operator. A token with a spelling variant matches either form.
+    """
+    toks = [t.lower() for t in TOKEN.findall(text or "")]
+    toks = [t for t in toks if t not in STOPWORDS and len(t) > 1]
+    seen, out = set(), []
+    for t in toks:
+        if t not in seen:
+            seen.add(t)
+            alts = spelling_variants(t)
+            out.append(f'"{t}"' if not alts else
+                       "(" + " OR ".join(f'"{x}"' for x in [t] + alts) + ")")
+    return f" {op} ".join(out[:40])
+
+
+def where_filters(args):
+    sql, params = [], []
+    for col, val in (("domain", getattr(args, "realm", None)),
+                     ("kind", getattr(args, "kind", None)),
+                     ("source_type", getattr(args, "type", None)),
+                     ("status", getattr(args, "status", None))):
+        if val:
+            sql.append(f"n.{col} = ?")
+            params.append(val)
+    if getattr(args, "tag", None):
+        sql.append("EXISTS (SELECT 1 FROM tags t WHERE t.note_id=n.id "
+                   "AND t.tag=?)")
+        params.append(args.tag)
+    if getattr(args, "since", None):
+        sql.append("COALESCE(NULLIF(n.published,''), n.captured) >= ?")
+        params.append(args.since)
+    return (" AND " + " AND ".join(sql) if sql else ""), params
+
+
+def tags_of(db, nid):
+    return {r[0] for r in db.execute(
+        "SELECT tag FROM tags WHERE note_id=?", (nid,))}
+
+
+def fmt(row, score=None):
+    slug, title, kind, domain, date = row
+    head = f"  {slug}"
+    if score is not None:
+        head = f"  [{score:5.1f}] {slug}"
+    meta = f"{kind}" + (f" · {domain}" if domain else "") + (f" · {date}" if date else "")
+    return f"{head}\n        {title}\n        {meta}"
+
+
+# --------------------------------------------------------------------------
+# semantic layer (optional; see module docstring)
+# --------------------------------------------------------------------------
+
+BULLET = re.compile(r"^[-*] (.+)$", re.M)
+
+
+def passages_of(title, tldr, body):
+    """What gets embedded: title + TL;DR as one passage, then each top-level
+    Key-claims bullet, prefixed with the title so it keeps its context.
+    Notes and MOCs without those sections fall back to the opening body text.
+    Returns [(anchor, text)]; anchor is the bullet's `^block-id` if it has one.
+    """
+    head = f"{title}. {tldr}".strip() if tldr else ""
+    claims = section(body, "Key claims & data") or section(body, "Key claims")
+    out = []
+    if head:
+        out.append(("", head))
+    for m in BULLET.finditer(claims):
+        line = m.group(1)
+        bid = BLOCK_ID.search(line)
+        text = BLOCK_ID.sub("", line).strip()
+        if len(text) > 20:
+            out.append(("^" + bid.group(1) if bid else "", f"{title}: {text}"))
+    if not out:
+        plain = re.sub(r"\s+", " ", BLOCK_ID.sub("", body)).strip()
+        out.append(("", f"{title}. {plain[:1000]}"))
+    return out
+
+
+def load_embedder():
+    """Return the fastembed model, or None when the extra is not installed."""
+    try:
+        from fastembed import TextEmbedding
+    except ImportError:
+        return None
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    return TextEmbedding(EMB_MODEL, cache_dir=str(MODEL_DIR))
+
+
+def semantic_index(db, model, verbose=False):
+    """Sync the passage-embedding cache with the notes; return
+    (note_ids, anchors, texts, matrix). Only unseen passages are embedded."""
+    import numpy as np
+    emb = sqlite3.connect(EMB_PATH, timeout=30)
+    emb.execute("CREATE TABLE IF NOT EXISTS vec (h TEXT PRIMARY KEY, v BLOB)")
+    rows = []
+    for nid, title, tldr, body in db.execute(
+            "SELECT id,title,tldr,body FROM notes"):
+        for anchor, text in passages_of(title, tldr, body):
+            h = hashlib.sha1(f"{EMB_MODEL}\0{text}".encode()).hexdigest()
+            rows.append((nid, anchor, text, h))
+    have = {h for (h,) in emb.execute("SELECT h FROM vec")}
+    todo = {h: t for _, _, t, h in rows if h not in have}
+    if todo:
+        t0 = time.time()
+        vecs = model.embed(list(todo.values()), batch_size=64)
+        # OR IGNORE: a concurrent run may have embedded the same passage.
+        emb.executemany("INSERT OR IGNORE INTO vec VALUES (?,?)",
+                        [(h, np.asarray(v, dtype=np.float32).tobytes())
+                         for h, v in zip(todo, vecs)])
+        emb.commit()
+        if verbose:
+            print(f"embedded {len(todo)} new passage(s) in "
+                  f"{time.time() - t0:.1f}s", file=sys.stderr)
+    live = {r[3] for r in rows}
+    stale = have - live
+    if stale:  # drop vectors for passages that no longer exist
+        emb.executemany("DELETE FROM vec WHERE h=?", [(h,) for h in stale])
+        emb.commit()
+    vec = dict(emb.execute("SELECT h, v FROM vec"))
+    mat = np.stack([np.frombuffer(vec[r[3]], dtype=np.float32) for r in rows])
+    mat /= np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9
+    return [r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows], mat
+
+
+def semantic_scores(db, model, text, verbose=False):
+    """Best passage cosine per note id: {nid: (score, anchor, passage)}."""
+    import numpy as np
+    ids, anchors, texts, mat = semantic_index(db, model, verbose)
+    q = np.asarray(next(iter(model.embed([text]))), dtype=np.float32)
+    sims = mat @ (q / (np.linalg.norm(q) + 1e-9))
+    best = {}
+    for i in np.argsort(-sims):
+        nid = ids[i]
+        if nid not in best:
+            best[nid] = (float(sims[i]), anchors[i], texts[i])
+    return best
+
+
+# Swept 2026-09-24 on the author's vault eval set (eval/queries.tsv) (W 20-80 x floor 0.15-0.35): the
+# surface is flat (recall@10 0.82-0.89); 30/0.2 sits mid-plateau and ties the
+# old 40/0.25 on the held-out set.
+SEM_WEIGHT = 30.0  # a cosine of 1.0 is worth 3/4 of the BM25 cap
+SEM_FLOOR = 0.2    # MiniLM cosines below this are noise
+
+
+def add_semantic(db, scores, text, skip=None):
+    """Blend semantic similarity into a `_related` score dict, in place.
+    Returns False (and warns) when the extra is not installed."""
+    model = load_embedder()
+    if model is None:
+        print("note: --semantic ignored; " + SEMANTIC_HINT.split("\n")[0],
+              file=sys.stderr)
+        return False
+    for nid, (sim, _, _) in semantic_scores(db, model, text).items():
+        if nid != skip and sim > SEM_FLOOR:
+            scores[nid] += SEM_WEIGHT * (sim - SEM_FLOOR) / (1 - SEM_FLOOR)
+    return True
+
+
+# --------------------------------------------------------------------------
+# commands
+# --------------------------------------------------------------------------
+
+def cmd_build(args):
+    build()
+
+
+def _search(db, q, limit, flt="", fparams=()):
+    """Ranked hits for free text: notes matching all terms first, then the
+    remaining slots filled with any-term matches. Returns (hits, mode); each
+    hit is (slug, title, kind, domain, date, bm25)."""
+    def run(e):
+        return db.execute(
+            "SELECT n.slug,n.title,n.kind,n.domain,"
+            "COALESCE(NULLIF(n.published,''),n.captured), "
+            "bm25(notes_fts,8.0,12.0,6.0,4.0,1.0) AS r "
+            "FROM notes_fts JOIN notes n ON n.id=notes_fts.rowid "
+            f"WHERE notes_fts MATCH ?{flt} ORDER BY r LIMIT ?",
+            [e] + list(fparams) + [limit]).fetchall()
+
+    hits = run(fts_query(q, "AND"))
+    n_all = len(hits)
+    if n_all < limit:  # top up rather than stop at a thin all-term list
+        have = {h[0] for h in hits}
+        hits += [h for h in run(fts_query(q, "OR"))
+                 if h[0] not in have][:limit - n_all]
+    if n_all == len(hits):
+        mode = "all terms"
+    elif n_all == 0:
+        mode = "any term (no result matched all)"
+    else:
+        mode = (f"{n_all} matched all terms; the rest match any term "
+                "(weaker evidence)")
+    return hits, mode
+
+
+def cmd_search(args):
+    db = connect()
+    q = " ".join(args.query)
+    flt, fparams = where_filters(args)
+    if not fts_query(q, "AND"):
+        print("no searchable terms in query", file=sys.stderr)
+        return 1
+    hits, mode = _search(db, q, args.limit, flt, fparams)
+    if not hits:
+        print(f"no matches for: {q}")
+        return 0
+    print(f"{len(hits)} hit(s) · {mode}\n")
+    for h in hits:
+        print(fmt(h[:5], -h[5]))
+        print()
+    return 0
+
+
+# Hub dampening. WFM (arXiv:2609.18182 §3.2) names "uniform attention
+# collapse": on a dense node every neighbour gets ~1/|N(v)| of the weight, so
+# the node's edges stop carrying signal. The vault has the same shape -- the
+# ai-agents MOC links ~180 notes and the ai-agents tag sits on ~180 -- so a flat
+# score lets hubs rank near the top of every `related` list by adjacency alone.
+# The fix is training-free: scale each one-hop edge by the far node's degree.
+# (IDF-weighting tag overlap was tried too and measured no gain on
+# scholia-eval -- link recall 0.652 with IDF vs 0.654 flat -- so tags stay
+# a plain overlap count.)
+TAG_WEIGHT = 18.0
+LINK_WEIGHT = 12.0
+HUB_DEGREE = 10  # nodes up to this degree keep the full LINK_WEIGHT
+
+
+def node_degrees(db):
+    """In-vault link degree (out + in) per note id."""
+    deg = defaultdict(int)
+    for sid, c in db.execute("SELECT src_id, COUNT(*) FROM links "
+                             "WHERE resolved=1 GROUP BY src_id"):
+        deg[sid] += c
+    for did, c in db.execute("SELECT n.id, COUNT(*) FROM links l "
+                             "JOIN notes n ON n.slug=l.dst GROUP BY n.id"):
+        deg[did] += c
+    return deg
+
+
+def link_weight(degree):
+    """Full weight up to HUB_DEGREE, then 1/log(1+degree) decay."""
+    if degree <= HUB_DEGREE:
+        return LINK_WEIGHT
+    return LINK_WEIGHT * math.log(1 + HUB_DEGREE) / math.log(1 + degree)
+
+
+def _related(db, nid, text, tags, limit, exclude_slug=None, semantic=False):
+    """Blend keyword relevance, tag overlap, and degree-damped
+    one-hop graph adjacency; optionally passage-embedding similarity."""
+    expr = fts_query(text, "OR")
+    scores, meta = defaultdict(float), {}
+    if semantic:
+        add_semantic(db, scores, text, skip=nid)
+    if expr:
+        for r in db.execute(
+                "SELECT n.id,n.slug,n.title,n.kind,n.domain,"
+                "COALESCE(NULLIF(n.published,''),n.captured),"
+                "bm25(notes_fts,8.0,12.0,6.0,4.0,1.0) AS r "
+                "FROM notes_fts JOIN notes n ON n.id=notes_fts.rowid "
+                "WHERE notes_fts MATCH ? ORDER BY r LIMIT 200", (expr,)):
+            scores[r[0]] += min(-r[6], 40.0)
+            meta[r[0]] = r[1:6]
+
+    if tags:
+        qs = ",".join("?" * len(tags))
+        for nid2, shared in db.execute(
+                f"SELECT note_id, COUNT(*) FROM tags WHERE tag IN ({qs}) "
+                "GROUP BY note_id", tuple(tags)):
+            own = len(tags_of(db, nid2)) or 1
+            scores[nid2] += TAG_WEIGHT * (shared / max(len(tags), own))
+
+    if nid:
+        deg = node_degrees(db)
+        slug = db.execute("SELECT slug FROM notes WHERE id=?",
+                          (nid,)).fetchone()[0]
+        for (nid2,) in db.execute(
+                "SELECT src_id FROM links WHERE dst=?", (slug,)):
+            scores[nid2] += link_weight(deg[nid2])
+        for (dst,) in db.execute("SELECT dst FROM links WHERE src_id=?",
+                                 (nid,)):
+            row = db.execute("SELECT id FROM notes WHERE slug=?",
+                             (dst,)).fetchone()
+            if row:
+                scores[row[0]] += link_weight(deg[row[0]])
+        scores.pop(nid, None)
+
+    out = []
+    for nid2, sc in sorted(scores.items(), key=lambda x: -x[1])[:limit * 3]:
+        if nid2 not in meta:
+            row = db.execute(
+                "SELECT slug,title,kind,domain,"
+                "COALESCE(NULLIF(published,''),captured) FROM notes WHERE id=?",
+                (nid2,)).fetchone()
+            if not row:
+                continue
+            meta[nid2] = row
+        if exclude_slug and meta[nid2][0] == exclude_slug:
+            continue
+        out.append((nid2, sc, meta[nid2]))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def suggest_tags(db, related):
+    counts = defaultdict(int)
+    for nid, _, _ in related:
+        for t in tags_of(db, nid):
+            counts[t] += 1
+    return sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:12]
+
+
+def cmd_related(args):
+    db = connect()
+    target = " ".join(args.target)
+    row = db.execute(
+        "SELECT id,slug,title,tldr FROM notes WHERE slug=? OR path=?",
+        (target, target)).fetchone()
+    if row:
+        nid, slug, title, tldr = row
+        text = f"{title} {tldr}"
+        tags = tags_of(db, nid)
+        print(f"related to: {slug}\n")
+    else:
+        nid, slug = None, None
+        text, tags = target, set()
+        print(f"related to free text: {target!r}\n")
+
+    rel = _related(db, nid, text, tags, args.limit, exclude_slug=slug,
+                   semantic=args.semantic)
+    if not rel:
+        print("  (nothing related found)")
+        return 0
+    for _, sc, m in rel:
+        print(fmt(m, sc))
+        print()
+    st = suggest_tags(db, rel)
+    if st:
+        print("suggested tags (from neighbours):")
+        print("  " + "  ".join(f"{t}({c})" for t, c in st))
+    return 0
+
+
+def cmd_orient(args):
+    """Capture-time pre-flight: have we got this already, and what is it near?
+
+    Run BEFORE fetching. The point is to spend a few milliseconds here rather
+    than a full fetch discovering the vault already holds the thing.
+    """
+    db = connect()
+    target = " ".join(args.target)
+    is_url = target.startswith(("http://", "https://"))
+
+    print("== idempotency ==")
+    dupes = []
+    if is_url:
+        norm = normalize_url(target)
+        dupes = db.execute(
+            "SELECT slug,title,kind,domain,"
+            "COALESCE(NULLIF(published,''),captured) FROM notes "
+            "WHERE url_norm=? OR url_norm LIKE ?",
+            (norm, norm.rstrip("/") + "/%")).fetchall()
+        if not dupes:  # the URL may only be mentioned in a body
+            for r in db.execute(
+                    "SELECT slug,title,kind,domain,"
+                    "COALESCE(NULLIF(published,''),captured),body FROM notes "
+                    "WHERE instr(body, ?) > 0", (norm.split("?")[0],)):
+                dupes.append(r[:5])
+    if dupes:
+        print(f"  ALREADY CAPTURED — {len(dupes)} existing note(s). "
+              "This is an UPDATE, not a new capture:")
+        for d in dupes:
+            print(fmt(d))
+        print()
+    else:
+        print("  no existing note matches this URL — new capture\n")
+
+    print("== nearby in the vault (label and link against these) ==")
+    rel = _related(db, None, target.replace("/", " ").replace("-", " "),
+                   set(), args.limit, semantic=args.semantic)
+    if rel:
+        for _, sc, m in rel:
+            print(fmt(m, sc))
+            print()
+        st = suggest_tags(db, rel)
+        if st:
+            print("reuse these tags before coining new ones:")
+            print("  " + "  ".join(f"{t}({c})" for t, c in st))
+        print()
+    else:
+        print("  (no near neighbours — likely a genuinely new theme)\n")
+
+    print("== candidate topic MOCs ==")
+    mocs = [m for _, _, m in rel if m[2] == "topics"]
+    if mocs:
+        for m in mocs:
+            print(f"  topics/{m[0]}.md — {m[1]}")
+    else:
+        print("  none scored; run `scholia search <theme> --kind topics`")
+    return 0
+
+
+def cmd_semantic(args):
+    """Nearest notes by meaning, not keywords. Shows the passage that matched,
+    with its `#^block` anchor when it has one."""
+    model = load_embedder()
+    if model is None:
+        print(SEMANTIC_HINT, file=sys.stderr)
+        return 3
+    db = connect()
+    q = " ".join(args.query)
+    best = semantic_scores(db, model, q, verbose=True)
+    flt, fparams = where_filters(args)
+    allowed = {r[0] for r in db.execute(
+        f"SELECT n.id FROM notes n WHERE 1=1{flt}", fparams)}
+    hits = sorted(((s, nid, a, t) for nid, (s, a, t) in best.items()
+                   if nid in allowed), reverse=True)[:args.limit]
+    print(f"{len(hits)} nearest by meaning · {EMB_MODEL.split('/')[-1]}\n")
+    for sim, nid, anchor, text in hits:
+        row = db.execute(
+            "SELECT slug,title,kind,domain,"
+            "COALESCE(NULLIF(published,''),captured) FROM notes WHERE id=?",
+            (nid,)).fetchone()
+        print(fmt(row, sim * 100))
+        snip = text if len(text) <= 160 else text[:157] + "..."
+        print(f"        > {snip}" + (f"  [#{anchor}]" if anchor else ""))
+        print()
+    return 0
+
+
+def cmd_doctor(args):
+    db = connect()
+    issues = 0
+
+    print("== dangling wikilinks ==")
+    nmem = db.execute(
+        "SELECT COUNT(DISTINCT dst) FROM links WHERE resolved=2").fetchone()[0]
+    dangling = db.execute(
+        "SELECT dst, COUNT(*) c FROM links WHERE resolved=0 "
+        "GROUP BY dst ORDER BY c DESC, dst").fetchall()
+    print(f"  {nmem} target(s) resolve into the Claude memory namespace "
+          "(cross-namespace, not broken)")
+    if dangling:
+        strong = [d for d in dangling if d[1] >= args.min_inbound]
+        print(f"  {len(dangling)} genuinely unresolved target(s); "
+              f"{len(strong)} referenced {args.min_inbound}+ times "
+              "(worth creating, or a typo -- the rest are fine as stubs):")
+        for dst, c in strong[:args.limit]:
+            print(f"    {c:3d}x  [[{dst}]]")
+        issues += len(strong)
+    else:
+        print("  no unresolved targets outside that namespace")
+
+    style = db.execute(
+        "SELECT n.slug, l.raw FROM linkstyle l JOIN notes n ON n.id=l.src_id "
+        "ORDER BY n.slug").fetchall()
+    if style:
+        print(f"  {len(style)} link(s) written in non-canonical path form "
+              "(resolve fine; the vault convention is a bare slug):")
+        for slug, raw in style[:args.limit]:
+            print(f"    {slug}: [[{raw}]]")
+        issues += len(style)
+
+    print("\n== unresolved passage / section anchors ==")
+    nfrag = db.execute("SELECT COUNT(*) FROM fraglinks").fetchone()[0]
+    badfrag = db.execute(
+        "SELECT n.slug, f.dst, f.frag FROM fraglinks f "
+        "JOIN notes n ON n.id=f.src_id "
+        "WHERE f.ok=0 AND f.dst IN (SELECT slug FROM notes) "
+        "ORDER BY n.slug, f.dst").fetchall()
+    print(f"  {nfrag} [[note#anchor]] link(s); {len(badfrag)} point at a "
+          "block ID or heading the target note does not have:")
+    for slug, dst, frag in badfrag[:args.limit]:
+        print(f"    {slug}: [[{dst}#{frag}]]")
+    issues += len(badfrag)
+
+    print("\n== near-duplicate tags ==")
+    tags = [r[0] for r in db.execute(
+        "SELECT tag, COUNT(*) c FROM tags GROUP BY tag ORDER BY c DESC")]
+    counts = dict(db.execute("SELECT tag, COUNT(*) FROM tags GROUP BY tag"))
+
+    def hyphen_token(short, long):
+        return short in long.split("-")
+
+    pairs = []
+    for i, a in enumerate(tags):
+        for b in tags[i + 1:]:
+            short, long = (a, b) if len(a) <= len(b) else (b, a)
+            ratio = difflib.SequenceMatcher(None, a, b).ratio()
+            rare = min(counts[a], counts[b]) <= 2
+            why = None
+            if ratio >= 0.85:
+                why = f"{ratio:.2f}"
+            elif len(short) >= 4 and rare and long.startswith(short):
+                # e.g. quant(2) / quantization(16) -- a stray truncation
+                why = "prefix"
+            elif len(short) >= 4 and rare and hyphen_token(short, long):
+                # e.g. multi-gpu(2) / gpu(25) -- a rare compound of a common tag
+                why = "compound"
+            if why:
+                pairs.append((a, b, ratio, why))
+    if pairs:
+        print(f"  {len(pairs)} candidate merge pair(s):")
+        for a, b, _, why in pairs[:args.limit]:
+            print(f"    {a}({counts[a]})  ~  {b}({counts[b]})   [{why}]")
+        issues += len(pairs)
+    else:
+        print("  none")
+
+    print("\n== singleton tags (used once) ==")
+    singles = [r[0] for r in db.execute(
+        "SELECT tag FROM tags GROUP BY tag HAVING COUNT(*)=1 ORDER BY tag")]
+    print(f"  {len(singles)} of {len(tags)} tags are used exactly once")
+    if singles:
+        print("    " + ", ".join(singles[:args.limit]))
+    issues += len(singles)
+
+    print("\n== sources no topic MOC links to (orphans) ==")
+    orphans = db.execute(
+        "SELECT n.slug,n.title,n.kind,n.domain,"
+        "COALESCE(NULLIF(n.published,''),n.captured) FROM notes n "
+        "WHERE n.kind='sources' AND NOT EXISTS ("
+        "  SELECT 1 FROM links l JOIN notes t ON t.id=l.src_id "
+        "  WHERE t.kind='topics' AND l.dst=n.slug) "
+        "ORDER BY 5 DESC").fetchall()
+    if orphans:
+        print(f"  {len(orphans)} source(s) unreachable from any MOC:")
+        for o in orphans[:args.limit]:
+            print(fmt(o))
+        issues += len(orphans)
+    else:
+        print("  none")
+
+    print("\n== realm tags (personal -> private, work -> work) ==")
+    untagged = db.execute(
+        "SELECT n.slug, n.domain FROM notes n WHERE "
+        "(n.domain='personal' AND NOT EXISTS (SELECT 1 FROM tags t "
+        "  WHERE t.note_id=n.id AND t.tag='private')) OR "
+        "(n.domain='work' AND NOT EXISTS (SELECT 1 FROM tags t "
+        "  WHERE t.note_id=n.id AND t.tag='work')) ORDER BY n.slug").fetchall()
+    print(f"  {len(untagged)} personal/work note(s) missing their realm tag")
+    for slug, dom in untagged:
+        print(f"    {dom:<8} {slug}  (add tag {'private' if dom == 'personal' else 'work'})")
+    issues += len(untagged)
+
+    print("\n== isolated notes (no in-vault link in or out) ==")
+    iso = db.execute(
+        "SELECT n.slug,n.title,n.kind,n.domain,"
+        "COALESCE(NULLIF(n.published,''),n.captured) FROM notes n "
+        "WHERE NOT EXISTS (SELECT 1 FROM links l WHERE l.src_id=n.id "
+        "  AND l.resolved=1) "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.dst=n.slug) "
+        "ORDER BY 5 DESC").fetchall()
+    print(f"  {len(iso)} note(s) nothing links to and that link nowhere")
+    for o in iso[:args.limit]:
+        print(fmt(o))
+    issues += len(iso)
+
+    print("\n== assets no note references ==")
+    assets = VAULT / "assets"
+    files = sorted(p.name for p in assets.iterdir()
+                   if p.is_file() and not p.name.startswith(".")) \
+        if assets.is_dir() else []
+    bodies = "\n".join(r[0] for r in db.execute("SELECT body FROM notes"))
+    unref = [f for f in files if f not in bodies]
+    print(f"  {len(unref)} of {len(files)} file(s) in assets/ are not "
+          "named in any note")
+    for f in unref[:args.limit]:
+        print(f"    assets/{f}")
+    issues += len(unref)
+
+    print("\n== thin metadata ==")
+    thin = db.execute(
+        "SELECT n.slug, (SELECT COUNT(*) FROM tags WHERE note_id=n.id) c "
+        "FROM notes n WHERE c <= 1 ORDER BY c, n.slug").fetchall()
+    inbox = db.execute(
+        "SELECT slug FROM notes WHERE status='inbox' ORDER BY slug").fetchall()
+    print(f"  {len(thin)} note(s) with <=1 tag")
+    for s, c in thin[:args.limit]:
+        print(f"    {c} tag  {s}")
+    drops = sorted(p.name for p in (VAULT / "inbox").glob("*.md")) \
+        if (VAULT / "inbox").is_dir() else []
+    print(f"  {len(inbox)} note(s) still status: inbox · "
+          f"{len(drops)} unprocessed drop(s) in inbox/")
+    for d in drops[:args.limit]:
+        print(f"          inbox/{d}")
+    issues += len(drops)
+    for (s,) in inbox[:args.limit]:
+        print(f"          {s}")
+    issues += len(thin) + len(inbox)
+
+    print(f"\n{issues} item(s) flagged. None are errors -- this is a hygiene "
+          "worklist, not a test suite.")
+    return 0
+
+
+def probe(url, timeout=10):
+    """One URL -> (verdict, detail). HEAD first, GET when HEAD is refused."""
+    import socket
+    import urllib.error
+    import urllib.request
+    ua = {"User-Agent": "Mozilla/5.0 (scholia linkcheck)"}
+    for method in ("HEAD", "GET"):
+        req = urllib.request.Request(url, method=method, headers=ua)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return "ok", str(r.status)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                return "dead", str(e.code)
+            if method == "HEAD" and e.code in (400, 403, 405, 501):
+                continue  # many servers refuse HEAD; retry with GET
+            if e.code in (401, 403, 429, 451, 999):
+                return "blocked", str(e.code)
+            return "error", str(e.code)
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, socket.gaierror):
+                return "dead", "DNS"
+            return "error", str(e.reason)[:40]
+        except Exception as e:  # timeouts, TLS, resets
+            return "error", type(e).__name__
+    return "error", "?"
+
+
+def cmd_linkcheck(args):
+    """Resolve every source's `url:` and report the dead ones. Network-bound;
+    never part of `doctor`, which stays offline."""
+    from concurrent.futures import ThreadPoolExecutor
+    db = connect()
+    rows = db.execute("SELECT slug, url FROM notes WHERE url LIKE 'http%' "
+                      "ORDER BY slug").fetchall()
+    with ThreadPoolExecutor(args.workers) as pool:
+        res = list(pool.map(lambda r: (r[0], r[1], *probe(r[1])), rows))
+    by = defaultdict(list)
+    for slug, url, verdict, detail in res:
+        by[verdict].append((slug, url, detail))
+    print(f"{len(rows)} url(s): " + " · ".join(
+        f"{len(by[k])} {k}" for k in ("ok", "dead", "blocked", "error")))
+    labels = {"dead": "DEAD (404/410/no DNS) -- archive to assets/ or mark",
+              "error": "unreachable this run (timeout/5xx/TLS) -- re-check",
+              "blocked": "blocked for bots (401/403/429) -- unknown, not dead"}
+    for k in ("dead", "error", "blocked"):
+        if by[k] and (k != "blocked" or args.all):
+            print(f"\n== {labels[k]} ==")
+            for slug, url, detail in by[k]:
+                print(f"  [{detail}] {slug}\n        {url}")
+    return 0
+
+
+def cmd_entity(args):
+    """A generated entity page: every passage in the vault that names a lab,
+    model, person or project. WFM (arXiv:2609.18182 §3.1) links each entity to
+    the passages that describe it; this derives those links on demand from
+    Key-claims bullets and TL;DRs instead of keeping entity files that rot."""
+    db = connect()
+    name = " ".join(args.name)
+    pat = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w])", re.I)
+    expr = '"' + name.replace('"', "") + '"'
+    rows = db.execute(
+        "SELECT n.slug,n.title,n.kind,n.domain,"
+        "COALESCE(NULLIF(n.published,''),n.captured),n.tldr,n.body "
+        "FROM notes_fts JOIN notes n ON n.id=notes_fts.rowid "
+        "WHERE notes_fts MATCH ? ORDER BY 5 DESC", (expr,)).fetchall()
+    named, passages = [], 0
+    for slug, title, kind, dom, date, tldr, body in rows:
+        claims = section(body, "Key claims & data") or section(body, "Key claims")
+        hits = []
+        for m in BULLET.finditer(claims):
+            line = m.group(1)
+            if pat.search(BLOCK_ID.sub("", line)):
+                bid = BLOCK_ID.search(line)
+                text = BLOCK_ID.sub("", line).strip()
+                hits.append((f"#^{bid.group(1)}" if bid else "",
+                             text if len(text) <= 150 else text[:147] + "..."))
+        in_title = bool(pat.search(title))
+        if not (hits or in_title or pat.search(tldr or "")):
+            continue  # FTS matched a token, not the name as written
+        named.append((slug, title, kind, dom, date, in_title, hits))
+        passages += len(hits)
+    if not named:
+        print(f"no note names {name!r}")
+        return 0
+    about = [r for r in named if r[5]]
+    print(f"{name}: {len(named)} note(s) · {len(about)} about it (in the title)"
+          f" · {passages} key-claim passage(s)\n")
+    for slug, title, kind, dom, date, in_title, hits in (
+            about + [r for r in named if not r[5]])[:args.limit]:
+        print(fmt((slug, title, kind, dom, date)))
+        for anchor, text in hits[:args.passages]:
+            print(f"        > {text}" + (f"  [{anchor}]" if anchor else ""))
+        print()
+    return 0
+
+
+def cmd_tags(args):
+    """Every tag with its count; or, given a tag, the notes that carry it."""
+    db = connect()
+    if args.tag:
+        rows = db.execute(
+            "SELECT n.slug,n.title,n.kind,n.domain,"
+            "COALESCE(NULLIF(n.published,''),n.captured) FROM notes n "
+            "JOIN tags t ON t.note_id=n.id WHERE t.tag=? ORDER BY 5 DESC",
+            (args.tag,)).fetchall()
+        print(f"{len(rows)} note(s) tagged {args.tag}\n")
+        for r in rows:
+            print(fmt(r))
+        return 0
+    rows = db.execute("SELECT tag, COUNT(*) c FROM tags GROUP BY tag "
+                      "ORDER BY c DESC, tag").fetchall()
+    print(f"{len(rows)} tags\n")
+    for tag, c in rows:
+        print(f"  {c:4d}  {tag}")
+    return 0
+
+
+def cmd_backlinks(args):
+    """What links to a note, with passage-level anchors when cited that way."""
+    db = connect()
+    slug = canon_target(" ".join(args.target))
+    if not db.execute("SELECT 1 FROM notes WHERE slug=?", (slug,)).fetchone():
+        print(f"no note with slug {slug}", file=sys.stderr)
+        return 1
+    rows = db.execute(
+        "SELECT n.id,n.slug,n.title,n.kind,n.domain,"
+        "COALESCE(NULLIF(n.published,''),n.captured) FROM links l "
+        "JOIN notes n ON n.id=l.src_id WHERE l.dst=? "
+        "ORDER BY n.kind DESC, 6 DESC", (slug,)).fetchall()
+    print(f"{len(rows)} note(s) link to {slug}\n")
+    for nid, *r in rows:
+        print(fmt(tuple(r)))
+        frags = [f for (f,) in db.execute(
+            "SELECT frag FROM fraglinks WHERE src_id=? AND dst=?", (nid, slug))]
+        if frags:
+            print("        cites: " + "  ".join(f"#{f}" for f in frags))
+    return 0
+
+
+def cmd_stats(args):
+    db = connect()
+    print(f"vault: {VAULT}")
+    for kind in CONTENT_DIRS:
+        n = db.execute("SELECT COUNT(*),COALESCE(SUM(words),0) FROM notes "
+                       "WHERE kind=?", (kind,)).fetchone()
+        print(f"  {kind:<8} {n[0]:4d} notes · {n[1]:,} words")
+    for label, sql in (
+            ("realms", "SELECT domain,COUNT(*) FROM notes WHERE domain!='' "
+                       "GROUP BY domain ORDER BY 2 DESC"),
+            ("types", "SELECT source_type,COUNT(*) FROM notes "
+                      "WHERE source_type!='' GROUP BY source_type "
+                      "ORDER BY 2 DESC"),
+            ("top tags", "SELECT tag,COUNT(*) FROM tags GROUP BY tag "
+                         "ORDER BY 2 DESC LIMIT 15")):
+        rows = db.execute(sql).fetchall()
+        print(f"  {label}: " + "  ".join(f"{a}({b})" for a, b in rows))
+    lk = db.execute(
+        "SELECT COUNT(*), SUM(resolved=1), SUM(resolved=2), SUM(resolved=0) "
+        "FROM links").fetchone()
+    print(f"  links: {lk[0]} total · {lk[1]} in-vault · {lk[2]} to memory · "
+          f"{lk[3]} unresolved")
+    fl = db.execute("SELECT COUNT(*), COALESCE(SUM(ok),0), "
+                    "COUNT(DISTINCT dst) FROM fraglinks").fetchone()
+    print(f"  passage links: {fl[0]} [[note#anchor]] · {fl[1]} resolve · "
+          f"into {fl[2]} note(s)")
+    return 0
+
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="scholia",
+        description="Derived search index over a markdown vault. "
+                    "The markdown is canonical; this DB is a rebuildable cache.")
+    p.add_argument("--vault", help="vault directory (default: $SCHOLIA_VAULT, "
+                   "else the nearest parent holding sources/ and notes/)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("build", help="rebuild the index from scratch").set_defaults(
+        func=cmd_build)
+
+    s = sub.add_parser("search", help="ranked full-text search with filters")
+    s.add_argument("query", nargs="+")
+    s.add_argument("--limit", type=int, default=10)
+    s.add_argument("--realm", help="knowledge | personal | work")
+    s.add_argument("--kind", help="sources | notes | topics")
+    s.add_argument("--type", help="source_type, e.g. repo, pdf, article")
+    s.add_argument("--status")
+    s.add_argument("--tag")
+    s.add_argument("--since", help="YYYY-MM-DD, on published/captured")
+    s.set_defaults(func=cmd_search)
+
+    r = sub.add_parser("related", help="notes near a slug or free text")
+    r.add_argument("target", nargs="+")
+    r.add_argument("--limit", type=int, default=8)
+    r.add_argument("--semantic", action="store_true",
+                   help="also blend in embedding similarity (needs fastembed)")
+    r.set_defaults(func=cmd_related)
+
+    o = sub.add_parser("orient", help="capture pre-flight: dupe check + neighbours")
+    o.add_argument("target", nargs="+")
+    o.add_argument("--limit", type=int, default=8)
+    o.add_argument("--semantic", action="store_true",
+                   help="also blend in embedding similarity (needs fastembed)")
+    o.set_defaults(func=cmd_orient)
+
+    m = sub.add_parser("semantic", help="nearest notes by meaning "
+                       "(optional; needs fastembed)")
+    m.add_argument("query", nargs="+")
+    m.add_argument("--limit", type=int, default=10)
+    m.add_argument("--realm", help="knowledge | personal | work")
+    m.add_argument("--kind", help="sources | notes | topics")
+    m.add_argument("--type", help="source_type, e.g. repo, pdf, article")
+    m.add_argument("--tag")
+    m.add_argument("--since", help="YYYY-MM-DD, on published/captured")
+    m.set_defaults(func=cmd_semantic)
+
+    d = sub.add_parser("doctor", help="hygiene worklist")
+    d.add_argument("--limit", type=int, default=20)
+    d.add_argument("--min-inbound", type=int, default=2,
+                   help="dangling targets with at least this many inbound "
+                        "links are worth creating (default 2)")
+    d.set_defaults(func=cmd_doctor)
+
+    sub.add_parser("stats", help="vault shape at a glance").set_defaults(
+        func=cmd_stats)
+
+    lc = sub.add_parser("linkcheck", help="resolve every url: (network)")
+    lc.add_argument("--workers", type=int, default=16)
+    lc.add_argument("--all", action="store_true",
+                    help="also list bot-blocked urls")
+    lc.set_defaults(func=cmd_linkcheck)
+
+    e = sub.add_parser("entity", help="generated entity page: every passage "
+                       "naming a lab / model / person")
+    e.add_argument("name", nargs="+")
+    e.add_argument("--limit", type=int, default=15)
+    e.add_argument("--passages", type=int, default=3,
+                   help="key-claim passages shown per note (default 3)")
+    e.set_defaults(func=cmd_entity)
+
+    t = sub.add_parser("tags", help="every tag with counts, or one tag's notes")
+    t.add_argument("tag", nargs="?")
+    t.set_defaults(func=cmd_tags)
+
+    b = sub.add_parser("backlinks", help="notes that link to a slug")
+    b.add_argument("target", nargs="+")
+    b.set_defaults(func=cmd_backlinks)
+
+    args = p.parse_args()
+    vault = find_vault(args.vault)
+    if vault is None or not vault.is_dir():
+        print("no vault found: pass --vault DIR, set SCHOLIA_VAULT, or run "
+              "inside a directory holding sources/ and notes/", file=sys.stderr)
+        return 2
+    set_vault(vault)
+    return args.func(args) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
