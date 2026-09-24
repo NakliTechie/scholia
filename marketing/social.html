@@ -1,7 +1,7 @@
 <!doctype html>
 <!-- The GitHub social card (1280x640). marketing/render-social.sh renders it to
-     marketing/social.png. The terminal text is real (lightly abridged) output from the smoke-test vault
-     (tests/smoke.sh): `scholia backlinks` and `scholia doctor`. -->
+     marketing/social.png. Both panels are real runs from the author's vault, abridged:
+     a /capture-nt commit (8a3a6de, 2026-09-24) and a cold /ask-nt run (2026-09-24). -->
 <html><head><meta charset="utf-8">
 <style>
   html, body { margin: 0; background: #ffffff; }
@@ -17,27 +17,27 @@
   .facts { position: absolute; left: 72px; bottom: 64px; font-size: 15px; font-weight: 600;
            letter-spacing: 0.04em; color: #656d76; text-transform: uppercase; }
   .facts b { color: #0e7490; font-weight: 700; }
-  pre { position: absolute; left: 640px; width: 520px; margin: 0; padding: 22px 24px;
+  pre { position: absolute; left: 624px; width: 560px; margin: 0; padding: 22px 24px;
         background: #f6f8fa; border-radius: 12px; box-shadow: 0 0 0 1px #d0d7de inset;
-        font: 17px/1.5 ui-monospace, Menlo, Consolas, monospace; color: #1f2328; white-space: pre; }
-  pre b { color: #0e7490; } pre s { text-decoration: none; color: #cf222e; }
-  .t1 { top: 64px; } .t2 { top: 340px; }
+        font: 16px/1.55 ui-monospace, Menlo, Consolas, monospace; color: #1f2328; white-space: pre; }
+  pre b { color: #0e7490; } pre i { font-style: normal; color: #656d76; }
+  .t1 { top: 64px; } .t2 { top: 356px; }
 </style></head>
 <body>
   <div class="copy">
     <div class="brand"><span>scholia</span><i></i></div>
     <h1>A commonplace book for <em>the agent era.</em></h1>
-    <p class="sub">Capture what you read into plain Markdown. Search it, check it, and ask it with citations to the exact claim.</p>
+    <p class="sub"><b style="color:#1f2328">/capture-nt</b> files what you read as plain Markdown. <b style="color:#1f2328">/ask-nt</b> answers only from it, with citations.</p>
   </div>
   <div class="facts"><b>stdlib python</b> &nbsp;·&nbsp; no server &nbsp;·&nbsp; markdown is the truth &nbsp;·&nbsp; MIT</div>
-<pre class="t1"><b>$ scholia backlinks 2026-01-01-example-paper</b>
-1 note(s) link to 2026-01-01-example-paper
-
-  licensing-notes
-        notes · knowledge
-        cites: #^mit-most-common</pre>
-<pre class="t2"><b>$ scholia doctor</b>
-== unresolved passage / section anchors ==
-  1 point at a block ID the target lacks:
-    <s>[[example-paper#^no-such-claim]]</s></pre>
+<pre class="t1"><b>&gt; /capture-nt https://x.com/jvr0x/status/…</b>
+  new capture: not in the vault yet
+  + sources/…-kv-cache-slowdown.md
+  + assets/…-kv-cache-slowdown.txt  <i>snapshot</i>
+  ~ topics/ai-agents.md  topics/consumer-gpu…
+  committed and pushed</pre>
+<pre class="t2"><b>&gt; /ask-nt What is the licence of pdf-inspector?</b>
+  MIT, checked with the GitHub API at capture.
+  [[2026-02-06-pdf-inspector]]
+  <i>Rounds: 1/4 (Final)</i></pre>
 </body></html>
