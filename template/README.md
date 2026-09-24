@@ -44,7 +44,7 @@ rg --files-without-match "^domain:" sources/  # untagged ⇒ knowledge by defaul
 ```
 `domain` lives on **sources and notes** (the content); topic MOCs are cross-cutting and don't carry one.
 
-**Privacy:** keep the vault in a private repo. A `personal` note also carries the tag **`private`**; a `work` note carries the tag **`work`**. `vaultdb.py doctor` flags any that miss it, so `rg -l "private" sources/ notes/` always finds the sensitive set. If something genuinely sensitive lands, `domain` and these tags are what you would filter on.
+**Privacy:** keep the vault in a private repo. A `personal` note also carries the tag **`private`**; a `work` note carries the tag **`work`**. `scholia doctor` flags any that miss it, so `rg -l "private" sources/ notes/` always finds the sensitive set. If something genuinely sensitive lands, `domain` and these tags are what you would filter on.
 
 ### Source-note frontmatter
 ```yaml
@@ -103,7 +103,7 @@ A whole-file link says "somewhere in this source." When a note leans on one spec
 - **In the citing note**, link `[[source-slug#^block-id]]`. A section link, `[[source-slug#Key claims & data]]`, also works.
 - It is plain Obsidian syntax: Obsidian jumps to the passage, and `rg "\^benchmark"` finds it without Obsidian.
 - Add IDs when a claim gets cited, not in bulk. Never rewrite old links wholesale.
-- `vaultdb.py doctor` lists any `#^block` or `#heading` that the target note does not have; `stats` counts passage links.
+- `scholia doctor` lists any `#^block` or `#heading` that the target note does not have; `stats` counts passage links.
 
 ### Tags
 Lowercase kebab, in the `tags:` array. Reuse an existing tag before coining a new one. Tags are a coarse filter; `topics/` MOCs are the curated index.
