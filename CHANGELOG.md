@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **orient:** finds a URL anywhere in the target, so `orient "<url> <title words>"` reports ALREADY CAPTURED. Before, extra words after the URL made the duplicate check miss.
+
 ## v0.1.0 — 2026-09-24
 
 First release, spun out of a private vault's `bin/vaultdb.py` and ntkit's `capture-nt` / `ask-nt` skills.

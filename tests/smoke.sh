@@ -58,6 +58,7 @@ check "search via SCHOLIA_VAULT"     "example-paper" env SCHOLIA_VAULT="$v" "$S"
 check "search from inside the vault" "example-paper" sh -c "cd '$v/notes' && '$S' search copyleft"
 check "related finds the linked note" "licensing-notes" "$S" --vault "$v" related 2026-01-01-example-paper
 check "orient reports a known url"   "ALREADY CAPTURED" "$S" --vault "$v" orient https://example.com/paper
+check "orient finds a url among extra words" "ALREADY CAPTURED" "$S" --vault "$v" orient https://example.com/paper Example Paper licensing
 check "doctor flags the broken anchor" "#^no-such-claim" "$S" --vault "$v" doctor
 check "backlinks show the cited anchor" "cites: #^mit-most-common" "$S" --vault "$v" backlinks 2026-01-01-example-paper
 check "entity lists the naming passage" "MIT is the most common" "$S" --vault "$v" entity MIT

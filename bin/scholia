@@ -723,23 +723,28 @@ def cmd_orient(args):
     """
     db = connect()
     target = " ".join(args.target)
-    is_url = target.startswith(("http://", "https://"))
+    # The target may carry a title or keywords around the URL; match each
+    # URL on its own so the extra words never defeat the lookup.
+    urls = re.findall(r"https?://\S+", target)
 
     print("== idempotency ==")
-    dupes = []
-    if is_url:
-        norm = normalize_url(target)
-        dupes = db.execute(
+    dupes, seen = [], set()
+    for url in urls:
+        norm = normalize_url(url)
+        hits = db.execute(
             "SELECT slug,title,kind,domain,"
             "COALESCE(NULLIF(published,''),captured) FROM notes "
             "WHERE url_norm=? OR url_norm LIKE ?",
             (norm, norm.rstrip("/") + "/%")).fetchall()
-        if not dupes:  # the URL may only be mentioned in a body
-            for r in db.execute(
+        if not hits:  # the URL may only be mentioned in a body
+            hits = [r[:5] for r in db.execute(
                     "SELECT slug,title,kind,domain,"
                     "COALESCE(NULLIF(published,''),captured),body FROM notes "
-                    "WHERE instr(body, ?) > 0", (norm.split("?")[0],)):
-                dupes.append(r[:5])
+                    "WHERE instr(body, ?) > 0", (norm.split("?")[0],))]
+        for d in hits:
+            if d[0] not in seen:
+                seen.add(d[0])
+                dupes.append(d)
     if dupes:
         print(f"  ALREADY CAPTURED — {len(dupes)} existing note(s). "
               "This is an UPDATE, not a new capture:")
