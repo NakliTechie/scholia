@@ -751,8 +751,11 @@ def cmd_orient(args):
         for d in dupes:
             print(fmt(d))
         print()
-    else:
+    elif urls:
         print("  no existing note matches this URL — new capture\n")
+    else:
+        print("  no URL given — duplicate check skipped; "
+              "pass the source URL to check it\n")
 
     print("== nearby in the vault (label and link against these) ==")
     rel = _related(db, None, target.replace("/", " ").replace("-", " "),

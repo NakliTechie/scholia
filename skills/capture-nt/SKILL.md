@@ -27,7 +27,7 @@ scholia --vault "$VAULT" orient "<the url, path, or title>"
 ```
 It prints three blocks, and you act on each:
 
-1. **`== idempotency ==`** — if it says **ALREADY CAPTURED**, this is an **update**, not a new capture. Read the named note first and refresh it in place: keep its filename, its `captured` date, its `domain`, and every hand-written line of synthesis. Never write a second note for a source the vault already holds. If it reports no match, it is a new capture.
+1. **`== idempotency ==`** — if it says **ALREADY CAPTURED**, this is an **update**, not a new capture. Read the named note first and refresh it in place: keep its filename, its `captured` date, its `domain`, and every hand-written line of synthesis. Never write a second note for a source the vault already holds. If it reports no match, it is a new capture. If it says **no URL given** (a file path or title), it checked nothing: run the by-hand fallback below on the filename and title before treating it as new.
 2. **`== nearby in the vault ==`** — the notes this one will sit beside. Read the top 2–3 before writing; they tell you what the vault already knows, so the new note can link to them (Step 7) and say what is genuinely *new* rather than restating a neighbour. Neighbours also catch the subtler duplicate: the same paper captured earlier under a different URL.
 3. **`reuse these tags`** — the tags the neighbours already carry. **Reuse from this list before coining anything new.** A tag used once is nearly useless for retrieval; the whole point of the list is to stop tag cardinality drifting up. Coin a new tag only when nothing offered fits, and prefer an existing broader tag over a novel narrow one.
 

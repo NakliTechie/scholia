@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **orient:** finds a URL anywhere in the target, so `orient "<url> <title words>"` reports ALREADY CAPTURED. Before, extra words after the URL made the duplicate check miss.
+- **orient:** with no URL in the target, says the duplicate check was skipped instead of claiming no note matches. `/capture-nt` now runs its by-hand fallback in that case.
 
 ## v0.1.0 — 2026-09-24
 
