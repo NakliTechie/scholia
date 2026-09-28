@@ -5,7 +5,8 @@ set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 S="$here/bin/scholia"
 v=$(mktemp -d)
-trap 'rm -rf "$v"' EXIT
+p=$(mktemp -d)  # a projects root beside the vault
+trap 'rm -rf "$v" "$p"' EXIT
 cp -R "$here/template/." "$v/"
 pass=0
 fail=0
@@ -65,6 +66,24 @@ check "backlinks show the cited anchor" "cites: #^mit-most-common" "$S" --vault 
 check "entity lists the naming passage" "MIT is the most common" "$S" --vault "$v" entity MIT
 check "tags lists counts"            "2  licensing" "$S" --vault "$v" tags
 check "semantic without fastembed -> install hint" "needs fastembed" python3 -S "$S" --vault "$v" semantic licence
+
+# projects: two projects; only licence-tool shares the note's terms, and its
+# pending list already cites the note's url. Its history log is a record, not
+# current state, so a term found only there must not match.
+mkdir -p "$p/licence-tool/plan" "$p/weather-app/plan"
+printf '# licence-tool\nPicks a copyleft or permissive licence for a repo.\n' > "$p/licence-tool/README.md"
+printf '## Now\n- Read https://example.com/paper on licence choices\n' > "$p/licence-tool/plan/pending.md"
+printf '# weather-app\nRain forecasts on a phone.\n' > "$p/weather-app/README.md"
+printf '## Log\n- licence copyleft permissive\n' > "$p/weather-app/plan/history.md"
+check "projects without config -> hint" "no project directories configured" "$S" --vault "$v" projects 2026-01-01-example-paper
+check "projects --dir ranks the matching project" "] licence-tool — " "$S" --vault "$v" projects 2026-01-01-example-paper --dir "$p"
+check "projects flags an existing cite" "(already cites this source)" "$S" --vault "$v" projects 2026-01-01-example-paper --dir "$p"
+check "projects skips record files" "searched 3 file(s) in 2 project(s)" "$S" --vault "$v" projects 2026-01-01-example-paper --dir "$p"
+check "projects with a missing dir" "not found on this machine" "$S" --vault "$v" projects 2026-01-01-example-paper --dir "$p/nope"
+grep -v '^project_dirs' "$v/scholia.toml" > "$v/toml.tmp"
+printf 'project_dirs = ["%s"]\n' "$p" >> "$v/toml.tmp"
+mv "$v/toml.tmp" "$v/scholia.toml"
+check "projects reads project_dirs from scholia.toml" "] licence-tool — " "$S" --vault "$v" projects 2026-01-01-example-paper
 
 # Concurrency: parallel rebuilds must never see a half-built index.
 errs=0

@@ -2,3 +2,6 @@
 # Directories of other markdown notes this vault may [[wikilink]] into (e.g. an
 # agent's memory folder). Links resolving there are not reported as dangling.
 memory_dirs = []
+# Project roots for `scholia projects`: each subdirectory is one project, and its
+# README.md, plan/pending.md and plan/workplan.md are searched after a capture.
+project_dirs = []  # e.g. ["~/Code"]

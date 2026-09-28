@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **projects (new):** `scholia projects <slug | text>` ranks the user's projects by a note's distinctive terms, so a capture can end by saying where it matters. Roots come from `project_dirs` in `scholia.toml` (or `--dir`). Each project's current state is read: `README.md`, `plan/pending.md`, `plan/workplan.md`. Records (history, dated summaries) are skipped; on the author's machine they are 83% of plan text. Terms found in more than 20% of projects, citation boilerplate and bare numbers are ignored. A project that already cites the source is marked. 210 projects with those files, searched in about 0.3 s warm (0.9 s cold). 6 new smoke checks (22 total).
+- **/capture-nt:** new Step 10, Relevance. It names the closest vault notes from Step 2 and runs `projects`; it reports kept projects with one line on why, and writes to a project only on "note for <project>".
+- **search internals:** `fts_query` now builds on `fts_terms`; `scholia-eval` output is unchanged.
 - **orient:** finds a URL anywhere in the target, so `orient "<url> <title words>"` reports ALREADY CAPTURED. Before, extra words after the URL made the duplicate check miss.
 - **orient:** with no URL in the target, says the duplicate check was skipped instead of claiming no note matches. `/capture-nt` now runs its by-hand fallback in that case.
 

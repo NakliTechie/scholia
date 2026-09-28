@@ -55,6 +55,7 @@ uv run --no-project --with-requirements ~/Code/scholia/requirements-semantic.txt
 scholia search <terms> [--kind --tag --realm --since]  # ranked: all terms first, then any term
 scholia related <slug | free text> [--semantic]        # neighbours by text, tags and links
 scholia orient <url | path>                            # before a capture: already held? what is near?
+scholia projects <slug | text> [--dir DIR]             # after a capture: which projects it bears on
 scholia semantic <text>                                # optional: nearest notes by meaning
 scholia entity <name>                                  # every claim that names a lab, model, person
 scholia backlinks <slug>                               # what links here, with the #^claim cited
@@ -70,11 +71,11 @@ The agent face is the two skills in `skills/`: `/capture-nt <url | file>` writes
 ## Verify it yourself
 
 ```bash
-sh tests/smoke.sh     # 14 checks on a throwaway vault built from template/; exit 0 = pass
+sh tests/smoke.sh     # 22 checks on a throwaway vault built from template/; exit 0 = pass
 scholia-eval          # recall@10 and MRR@10 on <vault>/eval/queries.tsv
 ```
 
-The smoke test covers vault discovery, spelling-variant search, anchor checks, backlinks, entities, the missing-fastembed path, and eight parallel rebuilds. Retrieval quality is only as good as your labels: `scholia-eval --pool` prints each question's candidates for judging, and `--impl` scores an older engine file with the same labels, so a ranking change gets a before and after.
+The smoke test covers vault discovery, spelling-variant search, anchor checks, backlinks, entities, project matching, the missing-fastembed path, and eight parallel rebuilds. Retrieval quality is only as good as your labels: `scholia-eval --pool` prints each question's candidates for judging, and `--impl` scores an older engine file with the same labels, so a ranking change gets a before and after.
 
 ## License
 

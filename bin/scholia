@@ -67,6 +67,21 @@ HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", re.M)
 # <vault>/scholia.toml:  memory_dirs = ["~/.claude/projects/<slug>/memory"]
 MEMORY_DIRS = []
 
+# Projects outside the vault that a capture may bear on, for `projects`.
+# <vault>/scholia.toml:  project_dirs = ["~/Code"]
+# Each immediate subdirectory is one project. Only its current state is read:
+# README.md plus the two derived plan files of ntkit's plan/ contract, which
+# the reconcile pass rewrites from the records. Records (history log, dated
+# summaries, reports) are the past, and on this machine they are 83% of all
+# plan text. The vault itself and names starting with "." or "_" are skipped.
+PROJECT_DIRS = []
+PROJECT_FILES = ("README.md", "plan/pending.md", "plan/workplan.md")
+COMMON_SHARE = 0.2  # `projects` ignores query terms found in more of the projects
+# Citation boilerplate and bare numbers match a project by accident. A token
+# with no letter is dropped unless it is an arXiv id, which marks a real cite.
+CITATION_NOISE = {"et", "al", "al.", "arxiv", "pp", "doi"}
+ARXIV_ID = re.compile(r"\d{4}\.\d{4,5}(v\d+)?")
+
 
 def find_vault(explicit=None):
     if explicit:
@@ -82,16 +97,17 @@ def find_vault(explicit=None):
 
 def set_vault(path):
     """Point every module-level path at one vault and read its config."""
-    global VAULT, DB_PATH, EMB_PATH, MEMORY_DIRS
+    global VAULT, DB_PATH, EMB_PATH, MEMORY_DIRS, PROJECT_DIRS
     VAULT = path or Path.cwd()
     DB_PATH = VAULT / ".scholia.db"
     EMB_PATH = VAULT / ".scholia.emb.db"
-    MEMORY_DIRS = []
+    MEMORY_DIRS, PROJECT_DIRS = [], []
     conf = VAULT / "scholia.toml"
     if conf.is_file():
         import tomllib
         cfg = tomllib.loads(conf.read_text())
         MEMORY_DIRS = [Path(d).expanduser() for d in cfg.get("memory_dirs", [])]
+        PROJECT_DIRS = [Path(d).expanduser() for d in cfg.get("project_dirs", [])]
 
 
 set_vault(find_vault())
@@ -368,22 +384,24 @@ def spelling_variants(tok):
     return sorted(out)
 
 
-def fts_query(text, op="AND"):
-    """Turn free text into a safe FTS5 expression.
-
-    Every token is quoted, so user punctuation can never be read as an
+def fts_terms(text):
+    """[(token, FTS5 expression)] for each distinct searchable token, capped
+    at 40. Every token is quoted, so user punctuation can never be read as an
     FTS operator. A token with a spelling variant matches either form.
     """
     toks = [t.lower() for t in TOKEN.findall(text or "")]
     toks = [t for t in toks if t not in STOPWORDS and len(t) > 1]
-    seen, out = set(), []
-    for t in toks:
-        if t not in seen:
-            seen.add(t)
-            alts = spelling_variants(t)
-            out.append(f'"{t}"' if not alts else
-                       "(" + " OR ".join(f'"{x}"' for x in [t] + alts) + ")")
-    return f" {op} ".join(out[:40])
+    out = []
+    for t in dict.fromkeys(toks):
+        alts = spelling_variants(t)
+        out.append((t, f'"{t}"' if not alts else
+                    "(" + " OR ".join(f'"{x}"' for x in [t] + alts) + ")"))
+    return out[:40]
+
+
+def fts_query(text, op="AND"):
+    """Turn free text into a safe FTS5 expression (see fts_terms)."""
+    return f" {op} ".join(e for _, e in fts_terms(text))
 
 
 def where_filters(args):
@@ -779,6 +797,102 @@ def cmd_orient(args):
             print(f"  topics/{m[0]}.md — {m[1]}")
     else:
         print("  none scored; run `scholia search <theme> --kind topics`")
+    return 0
+
+
+def project_docs(roots):
+    """(project, file relative to the project, text) for each PROJECT_FILES
+    file that exists."""
+    vault = VAULT.resolve()
+    for root in roots:
+        for proj in sorted(p for p in root.iterdir() if p.is_dir()):
+            if proj.name.startswith((".", "_")) or proj.resolve() == vault:
+                continue
+            for rel in PROJECT_FILES:
+                try:
+                    yield proj.name, rel, (proj / rel).read_text(errors="replace")
+                except OSError:
+                    continue
+
+
+def cmd_projects(args):
+    """Capture-time relevance: which projects outside the vault does a note
+    bear on? Keyword overlap between the note and each project's current
+    state (PROJECT_FILES). A match is a lead to read, not a verdict.
+    """
+    roots = [Path(d).expanduser() for d in args.dir] if args.dir else PROJECT_DIRS
+    if not roots:
+        print("no project directories configured: add "
+              'project_dirs = ["~/Code"] to ' f"{VAULT / 'scholia.toml'}")
+        return 0
+    found = [r for r in roots if r.is_dir()]
+    if not found:
+        print("project directories not found on this machine: "
+              + ", ".join(str(r) for r in roots))
+        return 0
+
+    db = connect()
+    target = " ".join(args.target)
+    row = db.execute("SELECT id,slug,title,tldr,url_norm FROM notes "
+                     "WHERE slug=? OR path=?", (target, target)).fetchone()
+    if row:
+        text = " ".join([row[2], row[3]] + sorted(tags_of(db, row[0])))
+        cites = [c for c in (row[1], row[4]) if c]  # evidence it is already there
+        print(f"projects near: {row[1]}")
+    else:
+        text, cites = target, []
+        print(f"projects near free text: {target!r}")
+    terms = [(t, e) for t, e in fts_terms(text) if t not in CITATION_NOISE
+             and (re.search(r"[a-z]", t) or ARXIV_ID.fullmatch(t))]
+    if not terms:
+        print("no searchable terms", file=sys.stderr)
+        return 1
+
+    mem = sqlite3.connect(":memory:")
+    mem.execute("CREATE VIRTUAL TABLE docs USING "
+                "fts5(project UNINDEXED, file UNINDEXED, body)")
+    mem.executemany("INSERT INTO docs VALUES (?,?,?)", project_docs(found))
+    n_proj, n_files = mem.execute(
+        "SELECT COUNT(DISTINCT project), COUNT(*) FROM docs").fetchone()
+    print(f"  searched {n_files} file(s) in {n_proj} project(s) under "
+          + ", ".join(str(r) for r in found))
+
+    # A term found in more than COMMON_SHARE of the projects says nothing about
+    # which project this is for; rank on the rarer terms, rarest first.
+    cap = max(1, COMMON_SHARE * n_proj)
+    df = {t: mem.execute("SELECT COUNT(DISTINCT project) FROM docs "
+                         "WHERE docs MATCH ?", (e,)).fetchone()[0]
+          for t, e in terms}
+    rare = sorted(((t, e) for t, e in terms if 0 < df[t] <= cap),
+                  key=lambda te: df[te[0]])
+    dropped = [t for t, _ in terms if df[t] > cap]
+    if dropped:
+        print(f"  ignored as common (in >{COMMON_SHARE:.0%} of projects): "
+              + ", ".join(dropped))
+    print()
+    if not rare:
+        print("  (no project shares a distinctive term with this note)")
+        return 0
+    citing = {p for p, body in mem.execute("SELECT project, body FROM docs")
+              if any(c in body.lower() for c in cites)}
+
+    best = {}  # project -> its best-scoring file
+    for rid, proj, f, rank, snip in mem.execute(
+            "SELECT rowid, project, file, bm25(docs), "
+            "snippet(docs, 2, '«', '»', '…', 16) FROM docs "
+            "WHERE docs MATCH ? ORDER BY bm25(docs)",
+            (" OR ".join(e for _, e in rare),)):
+        best.setdefault(proj, (-rank, rid, f, snip))
+
+    for proj, (score, rid, f, snip) in sorted(
+            best.items(), key=lambda x: -x[1][0])[:args.limit]:
+        matched = [t for t, e in rare if mem.execute(
+            "SELECT 1 FROM docs WHERE rowid=? AND docs MATCH ?",
+            (rid, e)).fetchone()]
+        print(f"  [{score:5.1f}] {proj} — {f}"
+              + ("   (already cites this source)" if proj in citing else ""))
+        print(f"        matched (rarest first): {', '.join(matched[:10])}")
+        print(f"        {' '.join(snip.split())}\n")
     return 0
 
 
@@ -1182,6 +1296,15 @@ def main():
     o.add_argument("--semantic", action="store_true",
                    help="also blend in embedding similarity (needs fastembed)")
     o.set_defaults(func=cmd_orient)
+
+    pr = sub.add_parser("projects", help="after a capture: which projects "
+                        "outside the vault share its terms")
+    pr.add_argument("target", nargs="+", help="a note slug or free text")
+    pr.add_argument("--limit", type=int, default=5)
+    pr.add_argument("--dir", action="append",
+                    help="projects root (repeatable); default: project_dirs "
+                         "in <vault>/scholia.toml")
+    pr.set_defaults(func=cmd_projects)
 
     m = sub.add_parser("semantic", help="nearest notes by meaning "
                        "(optional; needs fastembed)")

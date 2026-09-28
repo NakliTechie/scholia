@@ -3,7 +3,7 @@ description: "Save a URL, file, PDF or chat share into the knowledge vault; comm
 argument-hint: "<url | file path>  [realm: knowledge|personal|work]"
 allowed-tools: ["Bash", "Glob", "Grep", "Read", "Write", "Edit"]
 entry: "knowledge vault present at the configured path"
-exit: "schema'd source note written, linked, committed + pushed; idempotent on re-run"
+exit: "schema'd source note written, linked, committed + pushed; relevant projects reported; idempotent on re-run"
 writes: "the knowledge vault"
 ---
 
@@ -68,7 +68,23 @@ git -C "$VAULT" push
 - If there's **no `origin`** or the **push fails** (offline / auth), keep the local commit and say so — never lose the capture.
 - Pushes to the **private** remote regardless of realm — by design, no waiting. Every realm is pushed; the vault's policy (2026-09-24, `$VAULT/README.md` → Realms) is one private repo, with personal/work notes marked by tag rather than kept off the remote.
 
-## Step 10 — Confirm
+## Step 10 — Relevance: the vault and the projects
+End every capture by asking where it matters. Two places:
+
+1. **The vault** — already done in Step 2. The `orient` neighbours are what Step 7 linked the note to. Name the closest one or two in the confirm; do not search again.
+2. **The projects** — the user's working repos, outside the vault:
+   ```bash
+   scholia --vault "$VAULT" projects <slug>
+   ```
+   It reads each project's current state only (`README.md`, `plan/pending.md`, `plan/workplan.md`; records like history and dated summaries are skipped) under `project_dirs` in `$VAULT/scholia.toml`. It ranks projects by the note's distinctive terms (terms found in >20% of projects are ignored), shows the matched terms rarest first with a snippet, and marks a project that **already cites this source**.
+
+A keyword match is a lead, not a verdict. For each of the top hits, read the matched lines in context. Keep a project only when the source bears on something open there: a Now or Parked item, an open question, a design choice, a stated antenna. Write one line on why. Most captures match no project; say so plainly.
+
+**Report; do not write.** A project's `plan/` changes only when the user said "note for <project>" in the capture request. For a kept project, offer that as the next step. A project that already cites the source needs no offer.
+
+If the command prints `no project directories configured` or `not found on this machine` (a cloud session), write `projects: skipped (<that reason>)` and carry on.
+
+## Step 11 — Confirm
 Short echo:
 ```
 Captured → sources/<date>-<slug>.md  (<new|updated>)
@@ -79,6 +95,8 @@ Captured → sources/<date>-<slug>.md  (<new|updated>)
   note:   notes/<slug>.md              (if promoted)
   status: <processed|inbox>
   pushed: <short-sha> → origin         (or "local only — <reason>")
+  near:   <closest vault note or two>
+  projects: <project> — <one-line why>  (one line each; or "none relevant" / "skipped (<reason>)")
 ```
 Note any gaps honestly (couldn't reach a paywall, no quotes extracted, links not followed, stub only).
 
