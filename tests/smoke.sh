@@ -6,7 +6,8 @@ here=$(cd "$(dirname "$0")/.." && pwd)
 S="$here/bin/scholia"
 v=$(mktemp -d)
 p=$(mktemp -d)  # a projects root beside the vault
-trap 'rm -rf "$v" "$p"' EXIT
+h=$(mktemp -d)  # a repo with an ntkit plan/ folder, for `history`
+trap 'rm -rf "$v" "$p" "$h"' EXIT
 cp -R "$here/template/." "$v/"
 pass=0
 fail=0
@@ -84,6 +85,47 @@ grep -v '^project_dirs' "$v/scholia.toml" > "$v/toml.tmp"
 printf 'project_dirs = ["%s"]\n' "$p" >> "$v/toml.tmp"
 mv "$v/toml.tmp" "$v/scholia.toml"
 check "projects reads project_dirs from scholia.toml" "] licence-tool — " "$S" --vault "$v" projects 2026-01-01-example-paper
+
+# history: one ntkit plan/ folder, searched with no vault. marmot is only in
+# _archive/ (the .txt and the >2 MB file must be skipped); quokka is on three
+# dates; walrus has none. linked/plan is a symlink to repo/plan.
+mkdir -p "$h/repo/plan/_archive" "$h/linked"
+cat > "$h/repo/plan/history.md" <<'EOF'
+# History
+
+## Decisions
+- 2026-09-20 — Dropped the zephyr exporter because nobody used it.
+
+## Log
+
+### 2026-09-12
+- Moved the quokka parser into its own module.
+
+### 2026-09-05
+- Tried a quokka cache; too slow, reverted.
+
+## Dead ends
+- The walrus index never beat plain grep.
+EOF
+printf '# Summary\n\n## Decisions\nThe marmot sync was retired in favour of plain rsync.\n' > "$h/repo/plan/_archive/2026-08-01-summary.md"
+printf -- '- 2026-09-08 14:32 — quokka parser feels slow on big files\n' > "$h/repo/plan/soc.md"
+printf 'marmot scratch\n' > "$h/repo/plan/scratch.txt"
+{ echo marmot; head -c 2200000 /dev/zero | tr '\0' x; } > "$h/repo/plan/big.md"
+ln -s "$h/repo/plan" "$h/linked/plan"
+dates() { "$@" | awk '/^  [^ ]/ {printf "%s ", $1}'; }  # hit dates, in order
+rc() { "$@" && echo "exit=0" || echo "exit=$?"; }
+check "history runs with no vault and no SCHOLIA_VAULT" "history: 1 match(es) in " env -u SCHOLIA_VAULT "$S" history marmot --plan "$h/repo"
+check "history skips non-markdown and files over 2 MB" "entries in 3 files)" env -u SCHOLIA_VAULT "$S" history marmot --plan "$h/repo"
+check "history finds an _archive/ entry, dated by file name" "2026-08-01  _archive/2026-08-01-summary.md:4  [Decisions]" "$S" history marmot --plan "$h/repo"
+check "history dates an entry from its ### heading" "2026-09-12  history.md:9  [2026-09-12]" "$S" history parser module --plan "$h/repo"
+check "history --since drops older entries" "history: 1 match(es)" "$S" history quokka --since 2026-09-10 --plan "$h/repo"
+check "history --chrono lists newest first" "2026-09-12 2026-09-08 2026-09-05 " dates "$S" history quokka --chrono --plan "$h/repo"
+check "history shows an undated entry as dashes" "----------  history.md:15  [Dead ends]" "$S" history walrus --plan "$h/repo"
+check "history falls back to any term, and says so" "no entry matched all terms" "$S" history marmot zephyr --plan "$h/repo"
+check "history follows a symlinked plan/" "_archive/2026-08-01-summary.md:4" "$S" history marmot --plan "$h/linked"
+check "history defaults to ./plan" "history: 1 match(es)" sh -c "cd '$h/repo' && '$S' history marmot"
+check "history without a plan folder -> message" "no plan folder found" "$S" history marmot --plan "$h/nope"
+check "history without a plan folder -> exit 2" "exit=2" rc "$S" history marmot --plan "$h/nope"
 
 # Concurrency: parallel rebuilds must never see a half-built index.
 errs=0

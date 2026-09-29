@@ -17,6 +17,9 @@ related/orient) embeds passages with a frozen all-MiniLM-L6-v2 via fastembed.
 Its vectors live in a second cache, .scholia.emb.db, keyed by passage hash, so
 only changed passages are re-embedded. Without fastembed installed, `semantic`
 exits with an install hint and every other command runs unchanged.
+
+`history` is the one command that needs no vault: it searches one ntkit plan/
+folder with a throwaway in-memory index built on every run.
 """
 
 import argparse
@@ -81,6 +84,12 @@ COMMON_SHARE = 0.2  # `projects` ignores query terms found in more of the projec
 # with no letter is dropped unless it is an arXiv id, which marks a real cite.
 CITATION_NOISE = {"et", "al", "al.", "arxiv", "pp", "doi"}
 ARXIV_ID = re.compile(r"\d{4}\.\d{4,5}(v\d+)?")
+
+# `history`: date-aware search over one ntkit plan/ folder (no vault needed).
+PLAN_MAX_BYTES = 2 * 1024 * 1024  # markdown files larger than this are skipped
+ISO_DATE = re.compile(r"(?<!\d)((?:19|20)\d\d-[01]\d-[0-3]\d)(?!\d)")
+LIST_ITEM = re.compile(r"(?:[-*]|\d+\.)[ \t]")  # at column 0: a top-level item
+FENCE = re.compile(r"[ \t]{0,3}(?:```|~~~)")
 
 
 def find_vault(explicit=None):
@@ -896,6 +905,187 @@ def cmd_projects(args):
     return 0
 
 
+# --------------------------------------------------------------------------
+# plan history (one ntkit plan/ folder; no vault)
+# --------------------------------------------------------------------------
+
+def iso_date(text):
+    """argparse type for --since/--until: a YYYY-MM-DD string."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {text!r}")
+    return text
+
+
+def first_date(*texts):
+    """The first YYYY-MM-DD in the first text that holds one, else ''."""
+    for t in texts:
+        m = ISO_DATE.search(t or "")
+        if m:
+            return m.group(1)
+    return ""
+
+
+def find_plan(explicit=None):
+    """The plan folder to search, resolved through symlinks, or None.
+
+    `--plan DIR` names a repo root or its plan/ folder; DIR/plan wins when it
+    exists. With no DIR: ./plan, else the working directory if it is named
+    plan. ntkit's plan/ is often a symlink into a central store.
+    """
+    if explicit:
+        d = Path(explicit).expanduser()
+        options = [d / "plan", d]
+    else:
+        here = Path.cwd()
+        options = [here / "plan"] + ([here] if here.name == "plan" else [])
+    for d in options:
+        if d.is_dir():
+            return d.resolve()
+    return None
+
+
+def plan_files(root):
+    """(path relative to root, text) for each *.md under root, recursively and
+    in sorted order. Follows symlinks; skips dot-directories and files over
+    PLAN_MAX_BYTES."""
+    seen = set()
+    for d, dirs, files in os.walk(root, followlinks=True):
+        real = os.path.realpath(d)
+        if real in seen:  # a symlink loop, or one folder linked twice
+            dirs[:] = []
+            continue
+        seen.add(real)
+        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
+        for f in sorted(files):
+            path = Path(d) / f
+            try:
+                if f.endswith(".md") and path.stat().st_size <= PLAN_MAX_BYTES:
+                    yield (str(path.relative_to(root)),
+                           path.read_text(encoding="utf-8", errors="replace"))
+            except OSError:  # a dangling link, or a file gone mid-walk
+                continue
+
+
+def plan_entries(text):
+    """Split one plan file into entries: [(line, section, heading date, text)].
+
+    A top-level list item (`- `, `* `, `1. `) with its indented continuation
+    lines is one entry; a paragraph is one entry. A heading is not an entry: it
+    sets the section (the nearest heading), and a date in it dates the entries
+    below until the next heading of the same or a higher level. Lines in a code
+    fence stay with the entry they sit in, so a `# comment` is not a heading.
+    """
+    out, heads = [], []  # heads: [(level, text, date)] on the path to here
+    cur, fence = None, False  # cur: [first line, "item" | "para", lines]
+
+    def close():
+        if cur and "".join(cur[2]).strip():
+            body = "\n".join(cur[2]).strip()
+            if cur[1] == "item":
+                body = LIST_ITEM.sub("", body, count=1)
+            date = next((d for _, _, d in reversed(heads) if d), "")
+            out.append((cur[0], heads[-1][1] if heads else "", date, body))
+
+    for n, line in enumerate(text.splitlines(), 1):
+        opens = bool(FENCE.match(line))
+        if fence or opens:
+            fence ^= opens
+            if cur is None:
+                cur = [n, "para", []]
+            cur[2].append(line)
+            continue
+        head = HEADING.match(line)
+        if head:
+            close()
+            cur = None
+            level = len(line) - len(line.lstrip("#"))
+            heads = [h for h in heads if h[0] < level]
+            heads.append((level, head.group(1), first_date(head.group(1))))
+        elif not line.strip():
+            if cur and cur[1] == "item":
+                cur[2].append("")  # an indented line may still continue it
+            else:
+                close()
+                cur = None
+        elif line[0] in " \t" and cur:
+            cur[2].append(line)
+        elif LIST_ITEM.match(line):
+            close()
+            cur = [n, "item", [line]]
+        elif cur and cur[1] == "para":
+            cur[2].append(line)
+        else:
+            close()
+            cur = [n, "para", [line]]
+    close()
+    return out
+
+
+def cmd_history(args):
+    """When and why: keyword search over one ntkit plan/ folder, each hit
+    dated from its own text, its heading, or its file name. BM25 order, or
+    newest first with --chrono. The index is built in memory on every run
+    and no vault is needed."""
+    root = find_plan(args.plan)
+    if root is None:
+        print(f"no plan folder found at {args.plan or Path.cwd()}: pass "
+              "--plan DIR (a repo root or its plan/ folder), or run in a "
+              "directory holding plan/", file=sys.stderr)
+        return 2
+    q = " ".join(args.terms)
+    if not fts_query(q):
+        print("no searchable terms in query", file=sys.stderr)
+        return 1
+
+    mem = sqlite3.connect(":memory:")
+    mem.execute("CREATE VIRTUAL TABLE entries USING fts5(file UNINDEXED, "
+                "line UNINDEXED, section UNINDEXED, date UNINDEXED, body)")
+    n_files = 0
+    for rel, text in plan_files(root):
+        n_files += 1
+        mem.executemany("INSERT INTO entries VALUES (?,?,?,?,?)", [
+            (rel, line, sec, first_date(body, hdate, Path(rel).name), body)
+            for line, sec, hdate, body in plan_entries(text)])
+    n_entries = mem.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+
+    flt, params = "", []
+    if args.since or args.until:  # an undated entry cannot pass a date filter
+        flt += " AND date != ''"
+    if args.since:
+        flt += " AND date >= ?"
+        params.append(args.since)
+    if args.until:
+        flt += " AND date <= ?"
+        params.append(args.until)
+
+    def count(expr):
+        return mem.execute("SELECT COUNT(*) FROM entries WHERE entries "
+                           f"MATCH ?{flt}", [expr] + params).fetchone()[0]
+
+    expr, fallback = fts_query(q, "AND"), False
+    total = count(expr)
+    if total == 0 and count(fts_query(q, "OR")):  # all terms first, then any
+        expr, fallback = fts_query(q, "OR"), True
+        total = count(expr)
+    order = ("date = '', date DESC, bm25(entries)" if args.chrono
+             else "bm25(entries)")
+    rows = mem.execute(
+        "SELECT file, line, section, date, "
+        "snippet(entries, 4, '«', '»', '…', 24) FROM entries "
+        f"WHERE entries MATCH ?{flt} ORDER BY {order} LIMIT ?",
+        [expr] + params + [args.limit]).fetchall()
+
+    print(f"history: {total} match(es) in {root} "
+          f"({n_entries} entries in {n_files} files)")
+    if fallback:
+        print("  no entry matched all terms; these match any term")
+    for rel, line, sec, date, snip in rows:
+        print(f"  {date or '-' * 10}  {rel}:{line}"
+              + (f"  [{sec}]" if sec else ""))
+        print(f"        {' '.join(snip.split())}")
+    return 0
+
+
 def cmd_semantic(args):
     """Nearest notes by meaning, not keywords. Shows the passage that matched,
     with its `#^block` anchor when it has one."""
@@ -1306,6 +1496,21 @@ def main():
                          "in <vault>/scholia.toml")
     pr.set_defaults(func=cmd_projects)
 
+    hi = sub.add_parser("history", help="when and why: dated search of an "
+                        "ntkit plan/ folder (no vault needed)")
+    hi.add_argument("terms", nargs="+")
+    hi.add_argument("--plan", metavar="DIR",
+                    help="a repo root or its plan/ folder (default: ./plan, "
+                         "else the current dir if it is named plan)")
+    hi.add_argument("--since", type=iso_date, metavar="YYYY-MM-DD",
+                    help="entries dated on or after this day")
+    hi.add_argument("--until", type=iso_date, metavar="YYYY-MM-DD",
+                    help="entries dated on or before this day")
+    hi.add_argument("--limit", type=int, default=10)
+    hi.add_argument("--chrono", action="store_true",
+                    help="newest first instead of by relevance")
+    hi.set_defaults(func=cmd_history, needs_vault=False)
+
     m = sub.add_parser("semantic", help="nearest notes by meaning "
                        "(optional; needs fastembed)")
     m.add_argument("query", nargs="+")
@@ -1350,12 +1555,14 @@ def main():
     b.set_defaults(func=cmd_backlinks)
 
     args = p.parse_args()
-    vault = find_vault(args.vault)
-    if vault is None or not vault.is_dir():
-        print("no vault found: pass --vault DIR, set SCHOLIA_VAULT, or run "
-              "inside a directory holding sources/ and notes/", file=sys.stderr)
-        return 2
-    set_vault(vault)
+    if getattr(args, "needs_vault", True):
+        vault = find_vault(args.vault)
+        if vault is None or not vault.is_dir():
+            print("no vault found: pass --vault DIR, set SCHOLIA_VAULT, or run "
+                  "inside a directory holding sources/ and notes/",
+                  file=sys.stderr)
+            return 2
+        set_vault(vault)
     return args.func(args) or 0
 
 
