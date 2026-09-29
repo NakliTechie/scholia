@@ -1038,13 +1038,15 @@ def cmd_history(args):
         return 1
 
     mem = sqlite3.connect(":memory:")
+    # The section heading is indexed at half weight, so a term that appears
+    # only in a heading (a chunk title, "Dead ends") still finds its entries.
     mem.execute("CREATE VIRTUAL TABLE entries USING fts5(file UNINDEXED, "
-                "line UNINDEXED, section UNINDEXED, date UNINDEXED, body)")
+                "line UNINDEXED, date UNINDEXED, section, body)")
     n_files = 0
     for rel, text in plan_files(root):
         n_files += 1
         mem.executemany("INSERT INTO entries VALUES (?,?,?,?,?)", [
-            (rel, line, sec, first_date(body, hdate, Path(rel).name), body)
+            (rel, line, first_date(body, hdate, Path(rel).name), sec, body)
             for line, sec, hdate, body in plan_entries(text)])
     n_entries = mem.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
 
@@ -1067,8 +1069,8 @@ def cmd_history(args):
     if total == 0 and count(fts_query(q, "OR")):  # all terms first, then any
         expr, fallback = fts_query(q, "OR"), True
         total = count(expr)
-    order = ("date = '', date DESC, bm25(entries)" if args.chrono
-             else "bm25(entries)")
+    rank = "bm25(entries, 0, 0, 0, 0.5, 1.0)"
+    order = f"date = '', date DESC, {rank}" if args.chrono else rank
     rows = mem.execute(
         "SELECT file, line, section, date, "
         "snippet(entries, 4, '«', '»', '…', 24) FROM entries "

@@ -106,6 +106,9 @@ cat > "$h/repo/plan/history.md" <<'EOF'
 
 ## Dead ends
 - The walrus index never beat plain grep.
+
+## Chunk narwhal
+- Ship the settings page.
 EOF
 printf '# Summary\n\n## Decisions\nThe marmot sync was retired in favour of plain rsync.\n' > "$h/repo/plan/_archive/2026-08-01-summary.md"
 printf -- '- 2026-09-08 14:32 — quokka parser feels slow on big files\n' > "$h/repo/plan/soc.md"
@@ -121,6 +124,7 @@ check "history dates an entry from its ### heading" "2026-09-12  history.md:9  [
 check "history --since drops older entries" "history: 1 match(es)" "$S" history quokka --since 2026-09-10 --plan "$h/repo"
 check "history --chrono lists newest first" "2026-09-12 2026-09-08 2026-09-05 " dates "$S" history quokka --chrono --plan "$h/repo"
 check "history shows an undated entry as dashes" "----------  history.md:15  [Dead ends]" "$S" history walrus --plan "$h/repo"
+check "history matches a term found only in a heading" "history.md:18  [Chunk narwhal]" "$S" history narwhal --plan "$h/repo"
 check "history falls back to any term, and says so" "no entry matched all terms" "$S" history marmot zephyr --plan "$h/repo"
 check "history follows a symlinked plan/" "_archive/2026-08-01-summary.md:4" "$S" history marmot --plan "$h/linked"
 check "history defaults to ./plan" "history: 1 match(es)" sh -c "cd '$h/repo' && '$S' history marmot"

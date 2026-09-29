@@ -80,7 +80,7 @@ The agent face is the two skills in `skills/`: `/capture-nt <url | file>` writes
 ## Verify it yourself
 
 ```bash
-sh tests/smoke.sh     # 34 checks on a throwaway vault and plan/ folder; exit 0 = pass
+sh tests/smoke.sh     # 35 checks on a throwaway vault and plan/ folder; exit 0 = pass
 scholia-eval          # recall@10 and MRR@10 on <vault>/eval/queries.tsv
 ```
 

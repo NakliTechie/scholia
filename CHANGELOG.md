@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added
-- **history (new):** `scholia history <terms>` searches one ntkit `plan/` folder, `_archive/` and `lab/` included, and needs no vault. `history.md` and `_archive/` only grow, so this answers "when and why did we drop X?" without reading them by hand. Each top-level bullet or paragraph is one entry, dated from its own text, else its nearest dated heading, else its file name. BM25 order, or newest first with `--chrono`; `--since` and `--until` filter on the entry date. All terms first, then any term, with a one-line note. `--plan DIR` takes a repo root or its `plan/` folder and follows symlinks. `main()` now skips the vault lookup for commands that set `needs_vault=False`; every other command is unchanged. 12 new smoke checks (34 total).
+- **history (new):** `scholia history <terms>` searches one ntkit `plan/` folder, `_archive/` and `lab/` included, and needs no vault. `history.md` and `_archive/` only grow, so this answers "when and why did we drop X?" without reading them by hand. Each top-level bullet or paragraph is one entry, dated from its own text, else its nearest dated heading, else its file name. BM25 order, or newest first with `--chrono`; `--since` and `--until` filter on the entry date. All terms first, then any term, with a one-line note. `--plan DIR` takes a repo root or its `plan/` folder and follows symlinks. `main()` now skips the vault lookup for commands that set `needs_vault=False`; every other command is unchanged. 13 new smoke checks (35 total). The section heading is indexed at half weight, so a term that appears only in a heading still finds its entries.
 
 ## v0.2.0 — 2026-09-28
 
