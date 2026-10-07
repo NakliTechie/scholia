@@ -8,6 +8,7 @@
 ### Fixed
 - **orient:** the duplicate check now matches a note's `alt_urls` as well as its `url`. A tweet or repo filed under its paper (the vault's canonical-capture rule) used to read as a new capture. A new `urls` table holds every URL a note answers for.
 - **orient:** x.com links drop their query string (`?s=46&t=…` is share tracking), and `twitter.com` / `mobile.twitter.com` map to `x.com`. 4 new smoke checks (39 total).
+- **orient:** `alt_urls` written as a YAML block list (`- url` lines) is read too. 1 new smoke check (40 total).
 
 ## v0.2.0 — 2026-09-28
 

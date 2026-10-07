@@ -195,12 +195,20 @@ def parse_frontmatter(text):
     if end == -1:
         return meta, tags, text
     block, body = text[3:end], text[end + 4:]
+    list_key = None  # an `alt_urls:` written as a block list, one `- url` per line
     for line in block.splitlines():
         line = line.strip()
+        if list_key and line.startswith("- "):
+            meta.setdefault(list_key, []).append(line[2:].strip().strip("\"'"))
+            continue
+        list_key = None
         if not line or line.startswith("#") or ":" not in line:
             continue
         key, _, val = line.partition(":")
         key, val = key.strip(), val.strip()
+        if key == "alt_urls" and not val:
+            list_key = key
+            continue
         if key == "tags":
             tags = [t.strip().strip("\"'") for t in val.strip("[]").split(",")]
             tags = [t for t in tags if t]
