@@ -24,6 +24,7 @@ cat > "$v/sources/2026-01-01-example-paper.md" <<'EOF'
 ---
 title: "Example paper on licence terms"
 url: https://example.com/paper
+alt_urls: [https://x.com/someone/status/123, https://github.com/example/paper]
 source_type: pdf
 captured: 2026-01-02
 published: 2026-01-01
@@ -61,6 +62,10 @@ check "search from inside the vault" "example-paper" sh -c "cd '$v/notes' && '$S
 check "related finds the linked note" "licensing-notes" "$S" --vault "$v" related 2026-01-01-example-paper
 check "orient reports a known url"   "ALREADY CAPTURED" "$S" --vault "$v" orient https://example.com/paper
 check "orient finds a url among extra words" "ALREADY CAPTURED" "$S" --vault "$v" orient https://example.com/paper Example Paper licensing
+check "orient matches an alt_urls entry" "ALREADY CAPTURED" "$S" --vault "$v" orient https://github.com/example/paper
+check "orient ignores x.com share params" "ALREADY CAPTURED" "$S" --vault "$v" orient "https://x.com/someone/status/123?s=46&t=abc"
+check "orient maps twitter.com to x.com" "ALREADY CAPTURED" "$S" --vault "$v" orient https://twitter.com/someone/status/123
+check "orient still says new for an unknown url" "new capture" "$S" --vault "$v" orient https://example.com/other
 check "orient without a url skips the check" "no URL given" "$S" --vault "$v" orient Example Paper licensing
 check "doctor flags the broken anchor" "#^no-such-claim" "$S" --vault "$v" doctor
 check "backlinks show the cited anchor" "cites: #^mit-most-common" "$S" --vault "$v" backlinks 2026-01-01-example-paper

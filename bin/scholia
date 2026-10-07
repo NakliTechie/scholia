@@ -204,6 +204,9 @@ def parse_frontmatter(text):
         if key == "tags":
             tags = [t.strip().strip("\"'") for t in val.strip("[]").split(",")]
             tags = [t for t in tags if t]
+        elif key == "alt_urls":
+            alts = [u.strip().strip("\"'") for u in val.strip("[]").split(",")]
+            meta[key] = [u for u in alts if u]
         elif key in SCALARS:
             meta[key] = val.strip("\"'")
     return meta, tags, body
@@ -225,6 +228,9 @@ def normalize_url(url):
     u = re.sub(r"^https?://", "", u)
     u = re.sub(r"^www\.", "", u)
     u = u.split("#")[0]
+    u = re.sub(r"^(?:mobile\.)?twitter\.com/", "x.com/", u)
+    if u.startswith("x.com/"):  # ?s=46&t=… are share tracking, never identity
+        u = u.split("?")[0]
     if "?" in u:
         base, _, qs = u.partition("?")
         keep = [p for p in qs.split("&")
@@ -244,6 +250,7 @@ DROP TABLE IF EXISTS links;
 DROP TABLE IF EXISTS notes_fts;
 DROP TABLE IF EXISTS linkstyle;
 DROP TABLE IF EXISTS fraglinks;
+DROP TABLE IF EXISTS urls;
 CREATE TABLE notes (
   id INTEGER PRIMARY KEY, path TEXT, kind TEXT, slug TEXT,
   title TEXT, url TEXT, url_norm TEXT, author TEXT, source_type TEXT,
@@ -255,11 +262,14 @@ CREATE TABLE links (src_id INTEGER, dst TEXT, resolved INTEGER);
 CREATE TABLE linkstyle (src_id INTEGER, raw TEXT);
 -- one row per passage/section-level link; the file part is also in `links`
 CREATE TABLE fraglinks (src_id INTEGER, dst TEXT, frag TEXT, ok INTEGER);
+-- every URL a note answers for: its `url` and each of its `alt_urls`
+CREATE TABLE urls (note_id INTEGER, url_norm TEXT);
 CREATE VIRTUAL TABLE notes_fts USING fts5(slug, title, tags, tldr, body);
 CREATE INDEX idx_tags_tag ON tags(tag);
 CREATE INDEX idx_links_dst ON links(dst);
 CREATE INDEX idx_notes_slug ON notes(slug);
 CREATE INDEX idx_notes_urlnorm ON notes(url_norm);
+CREATE INDEX idx_urls_norm ON urls(url_norm);
 """
 
 
@@ -318,6 +328,9 @@ def _build_into(path, verbose):
              meta.get("created", ""), meta.get("updated", ""),
              meta.get("type", ""), tldr, body, len(body.split())))
         nid = cur.lastrowid
+        norms = {normalize_url(u) for u in [url, *meta.get("alt_urls", [])]}
+        db.executemany("INSERT INTO urls VALUES (?,?)",
+                       [(nid, n) for n in norms if n])
         db.executemany("INSERT INTO tags VALUES (?,?)",
                        [(nid, t) for t in tags])
         seen, seen_frag, style = set(), set(), set()
@@ -761,7 +774,8 @@ def cmd_orient(args):
         hits = db.execute(
             "SELECT slug,title,kind,domain,"
             "COALESCE(NULLIF(published,''),captured) FROM notes "
-            "WHERE url_norm=? OR url_norm LIKE ?",
+            "WHERE id IN (SELECT note_id FROM urls "
+            "WHERE url_norm=? OR url_norm LIKE ?)",
             (norm, norm.rstrip("/") + "/%")).fetchall()
         if not hits:  # the URL may only be mentioned in a body
             hits = [r[:5] for r in db.execute(
