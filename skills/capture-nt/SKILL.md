@@ -68,6 +68,8 @@ git -C "$VAULT" push
 - If there's **no `origin`** or the **push fails** (offline / auth), keep the local commit and say so — never lose the capture.
 - Pushes to the **private** remote regardless of realm — by design, no waiting. Every realm is pushed; the vault's policy (2026-09-24, `$VAULT/README.md` → Realms) is one private repo, with personal/work notes marked by tag rather than kept off the remote.
 
+**Then clean up the working files.** Once the commit has landed (local is enough), delete every file this capture wrote outside the vault: downloaded PDFs and pages, extracted text, images, scripts, in the session scratchpad or `/tmp`. The vault's `assets/` copy is the one that is kept. Delete them by name, only this capture's files; leave another session's scratch alone. If the commit failed, keep them and say so. Raw downloads such as a PDF whose text went to `assets/<slug>.txt` go too, unless the note links the PDF itself in `assets/`.
+
 ## Step 10 — Relevance: the vault and the projects
 End every capture by asking where it matters. Two places:
 
@@ -95,6 +97,7 @@ Captured → sources/<date>-<slug>.md  (<new|updated>)
   note:   notes/<slug>.md              (if promoted)
   status: <processed|inbox>
   pushed: <short-sha> → origin         (or "local only — <reason>")
+  cleaned: <N temp files deleted, MB>  (or "kept — <reason>")
   near:   <closest vault note or two>
   projects: <project> — <one-line why>  (one line each; or "none relevant" / "skipped (<reason>)")
 ```

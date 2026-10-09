@@ -5,6 +5,8 @@
 ### Added
 - **history (new):** `scholia history <terms>` searches one ntkit `plan/` folder, `_archive/` and `lab/` included, and needs no vault. `history.md` and `_archive/` only grow, so this answers "when and why did we drop X?" without reading them by hand. Each top-level bullet or paragraph is one entry, dated from its own text, else its nearest dated heading, else its file name. BM25 order, or newest first with `--chrono`; `--since` and `--until` filter on the entry date. All terms first, then any term, with a one-line note. `--plan DIR` takes a repo root or its `plan/` folder and follows symlinks. `main()` now skips the vault lookup for commands that set `needs_vault=False`; every other command is unchanged. 13 new smoke checks (35 total). The section heading is indexed at half weight, so a term that appears only in a heading still finds its entries.
 
+- **/capture-nt:** Step 9 now ends by deleting the capture's own temp files (downloads, extracts, images, scripts in the scratchpad or `/tmp`) once the commit lands; the `assets/` copy is the one kept. The confirm echo gains a `cleaned:` line. A sweep on 2026-10-09 found 621 leftover files (34 PDFs, ~220 MB) from 47 capture sessions, 27 of them byte-identical to files in `assets/`.
+
 ### Fixed
 - **orient:** the duplicate check now matches a note's `alt_urls` as well as its `url`. A tweet or repo filed under its paper (the vault's canonical-capture rule) used to read as a new capture. A new `urls` table holds every URL a note answers for.
 - **orient:** x.com links drop their query string (`?s=46&t=…` is share tracking), and `twitter.com` / `mobile.twitter.com` map to `x.com`. 4 new smoke checks (39 total).
