@@ -90,10 +90,9 @@ If the command prints `no project directories configured` or `not found on this 
 Chirag, 2026-10-18: look at each capture from several angles, and use other models for the ones you would miss. Run this after Step 10, only for a capture of a **public** source in the `knowledge` realm. Never send a `personal` or `work` note, or any text the user has not published, to a third-party model.
 
 1. Write the note's text to a scratch file with a short prompt: the reader's projects (read from `scholia.toml` `project_dirs` and each project's README line), then "give 4 to 6 angles the note does not cover: other uses, what a skeptic tests first, prior art or contradicting evidence, one cheap experiment; one short bullet each; name what is unverified."
-2. Call one or two models in parallel, each with a timeout of 240 s, in the background. The commands and which providers are healthy are in `~/Code/infra/ai/README.md`:
+2. Call **Codex plus two opencode free models** in parallel (Chirag, 2026-10-18: use them together for variety), each with a timeout of 240 s, in the background. Pick the two free models from different families (for example `deepseek` and `nemotron`, or `mimo` and `longcat`). The ids and which ones answered are in `~/Code/infra/ai/opencode-models.md`; the live list is `~/.opencode/bin/opencode models --refresh | grep -- '-free$'`. If a free model stalls or errors, drop it and note it. The commands:
    - `codex exec --skip-git-repo-check -s read-only -m gpt-5.6-sol "<prompt>" < /dev/null` (the config default model fails on a ChatGPT login; pass `-m`).
-   - `kimchi -p "<prompt>" --no-session` (key-based; check credits first, `minimax-m3` was out on 2026-10-18; try `--model kimi-k2.7`).
-   - `opencode run -m opencode/<id>-free "<prompt>"` (the key had expired on 2026-10-18; skip when it errors).
+   - `~/.opencode/bin/opencode run -m opencode/<id>-free "<prompt>" < /dev/null` (liveness of all eight free models was probed 2026-10-18; a stalled model gives no output, so the timeout matters).
 3. Read the answers critically. Keep an angle only if it is checkable; drop restatements and hype. Add the kept ones to the note under `## Angles from other models` with the model name and "unverified" where it is. If every model fails, write `angles: skipped (<reason>)` in the confirm and carry on. Never block the capture on this step.
 4. Delete the scratch files after the commit, as in Step 9.
 
