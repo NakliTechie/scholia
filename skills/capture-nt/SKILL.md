@@ -86,6 +86,17 @@ A keyword match is a lead, not a verdict. For each of the top hits, read the mat
 
 If the command prints `no project directories configured` or `not found on this machine` (a cloud session), write `projects: skipped (<that reason>)` and carry on.
 
+## Step 10b — Second opinions from other models (angles)
+Chirag, 2026-10-18: look at each capture from several angles, and use other models for the ones you would miss. Run this after Step 10, only for a capture of a **public** source in the `knowledge` realm. Never send a `personal` or `work` note, or any text the user has not published, to a third-party model.
+
+1. Write the note's text to a scratch file with a short prompt: the reader's projects (read from `scholia.toml` `project_dirs` and each project's README line), then "give 4 to 6 angles the note does not cover: other uses, what a skeptic tests first, prior art or contradicting evidence, one cheap experiment; one short bullet each; name what is unverified."
+2. Call one or two models in parallel, each with a timeout of 240 s, in the background. The commands and which providers are healthy are in `~/Code/infra/ai/README.md`:
+   - `codex exec --skip-git-repo-check -s read-only -m gpt-5.6-sol "<prompt>" < /dev/null` (the config default model fails on a ChatGPT login; pass `-m`).
+   - `kimchi -p "<prompt>" --no-session` (key-based; check credits first, `minimax-m3` was out on 2026-10-18; try `--model kimi-k2.7`).
+   - `opencode run -m opencode/<id>-free "<prompt>"` (the key had expired on 2026-10-18; skip when it errors).
+3. Read the answers critically. Keep an angle only if it is checkable; drop restatements and hype. Add the kept ones to the note under `## Angles from other models` with the model name and "unverified" where it is. If every model fails, write `angles: skipped (<reason>)` in the confirm and carry on. Never block the capture on this step.
+4. Delete the scratch files after the commit, as in Step 9.
+
 ## Step 11 — Confirm
 Short echo:
 ```
@@ -99,6 +110,7 @@ Captured → sources/<date>-<slug>.md  (<new|updated>)
   pushed: <short-sha> → origin         (or "local only — <reason>")
   cleaned: <N temp files deleted, MB>  (or "kept — <reason>")
   near:   <closest vault note or two>
+  angles:  <models used, N kept | skipped (<reason>)>
   projects: <project> — <one-line why>  (one line each; or "none relevant" / "skipped (<reason>)")
 ```
 Note any gaps honestly (couldn't reach a paywall, no quotes extracted, links not followed, stub only).
