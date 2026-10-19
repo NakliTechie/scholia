@@ -87,7 +87,7 @@ A keyword match is a lead, not a verdict. For each of the top hits, read the mat
 If the command prints `no project directories configured` or `not found on this machine` (a cloud session), write `projects: skipped (<that reason>)` and carry on.
 
 ## Step 10b — Second opinions from other models (angles)
-Look at each capture from several angles, and use other models for the ones you would miss. Run this after Step 10, only for a capture of a **public** source in the `knowledge` realm. Never send a `personal` or `work` note, or any text the user has not published, to a third-party model.
+Other models can show angles you would miss, but a panel costs time and model calls, so **this step is off by default**. Run it only when the user asks for it ("look from several angles", "ask other models", "panel"), or the capture is of unusual weight and the user has said such captures get one. Otherwise write `angles: not requested` in the confirm and move on. When it runs, run it after Step 10, only for a capture of a **public** source in the `knowledge` realm. Never send a `personal` or `work` note, or any text the user has not published, to a third-party model.
 
 This is `/panel-nt` in **light mode**; its runner and rules are in `panel-nt/`.
 1. Write the note's text to a scratch file with a short prompt: the reader's projects (read from `scholia.toml` `project_dirs` and each project's README line), then "give 4 to 6 angles the note does not cover: other uses, what a skeptic tests first, prior art or contradicting evidence, one cheap experiment; one short bullet each; name what is unverified."
