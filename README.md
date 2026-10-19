@@ -7,10 +7,13 @@
 <p align="center">Python 3.11 standard library. macOS, Linux. No server, no daemon, no account, no telemetry. Markdown is the source of truth.</p>
 
 <p align="center">
-  <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-0891b2?style=flat-square">
+  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-0891b2?style=flat-square"></a>
   <img alt="dependencies: stdlib" src="https://img.shields.io/badge/dependencies-stdlib-0891b2?style=flat-square">
   <img alt="server: none" src="https://img.shields.io/badge/server-none-0891b2?style=flat-square">
+  <img alt="account: none" src="https://img.shields.io/badge/account-none-0891b2?style=flat-square">
 </p>
+
+![A /capture-nt run that files a link as a source note and commits it, and an /ask-nt answer that cites the note it used](marketing/social.png)
 
 ## Install
 
@@ -20,38 +23,38 @@
 | The agent skills (Claude Code) | `cp -r ~/Code/scholia/skills/* ~/.claude/skills/` |
 | A new vault | `cp -R ~/Code/scholia/template ~/Code/knowledge && cd ~/Code/knowledge && git init` |
 
-Run it anywhere inside the vault, or point at one with `--vault DIR` or `SCHOLIA_VAULT`. The first command builds an index from your Markdown in well under a second; every command rebuilds it, so it is never stale.
+Run it anywhere inside the vault, or point at one with `--vault DIR` or `SCHOLIA_VAULT`. Every command rebuilds the index from your Markdown in well under a second, so it is never stale. Check the install and the vault:
 
 ```bash
-scholia search open source licence --limit 5
+scholia stats
 ```
 
-No config file is required and nothing runs in the background. The skills expect the vault at `~/Code/knowledge` unless `SCHOLIA_VAULT` says otherwise.
+No config file, no background process. The skills expect the vault at `~/Code/knowledge` unless `SCHOLIA_VAULT` says otherwise. No vault yet? `sh tests/smoke.sh` builds a throwaway one and exercises every command.
 
 ## Why
 
-You read something worth keeping, file it somewhere, and three months later you cannot find it. Or you find it, but you can't tell whether a line in your notes is what the author said or what you concluded. Or the link is dead.
+You read something worth keeping, file it somewhere, and three months later you cannot find it. Or you find it, but you cannot tell whether a line in your notes is what the author said or what you concluded. Or the link is dead.
 
-scholia keeps the old commonplace-book discipline and adds an index an agent can drive. A **source note** records what someone else said, with their numbers and quotes. A **note** records what you concluded, citing the exact claim it rests on (`[[source#^claim-id]]`). A topic map is kept by hand. `/capture-nt` checks the vault before it fetches, writes the source note, and saves the extracted text so a dead link loses nothing. `/ask-nt` answers only from the vault, in at most four search rounds, and cites every note it used.
+scholia keeps the old commonplace-book discipline and adds an index an agent can drive. A **source note** records what someone else said, with their numbers and quotes. A **note** records what you concluded, citing the exact claim it rests on (`[[source#^claim-id]]`). Topic maps are kept by hand. `/capture-nt` checks the vault before it fetches, writes the source note, and saves the extracted text so a dead link loses nothing. `/ask-nt` answers only from the vault, in at most four search rounds, and cites every note it used.
 
-**Use something else if** you want an agent memory that runs itself: [gbrain](https://github.com/garrytan/gbrain) runs a daemon that ingests and enriches around the clock, keeps a database as its source of truth, and serves it over MCP. If you want a graph view and editing, [Obsidian](https://obsidian.md) opens a scholia vault as-is; [VaultMind](https://github.com/NakliTechie/VaultMind) is a browser explorer for the same kind of folder. If you want to serve a Markdown folder over HTTP, see [commonplace](https://github.com/fredoliveira/commonplace).
+**Use something else if** you want an agent memory that runs itself: [gbrain](https://github.com/garrytan/gbrain) runs a daemon, keeps a database as its source of truth, and serves it over MCP. For a graph view and editing, [Obsidian](https://obsidian.md) opens a scholia vault as-is.
 
 ## Cite the claim, not the file
 
-End a load-bearing bullet in a source note with a block ID — `- MIT is the most common licence. ^mit-most-common` — and cite it from a note as `[[2026-01-01-example-paper#^mit-most-common]]`. It is plain Obsidian syntax and `rg` finds it. `scholia doctor` lists every anchor that does not resolve; `scholia backlinks <slug>` shows which claim each linking note cites; `scholia entity <name>` gathers every claim that names a lab, model or person.
+End a load-bearing bullet in a source note with a block ID: `- MIT is the most common licence. ^mit-most-common`. Cite it from a note as `[[2026-01-01-example-paper#^mit-most-common]]`. It is plain Obsidian syntax and `rg` finds it. `scholia doctor` lists every anchor that does not resolve, `scholia backlinks <slug>` shows which claim each linking note cites, and `scholia entity <name>` gathers every claim that names a lab, model or person.
 
-## Meaning, not only keywords
+## Search by meaning
 
-Keyword search misses a note that says the same thing in other words. The optional semantic layer embeds each note's title, TL;DR and key claims with the frozen `all-MiniLM-L6-v2` encoder (about 90 MB, downloaded once to `~/.cache/scholia/models`). It needs `fastembed`, pinned in `requirements-semantic.txt`; without it, `semantic` prints an install hint and every other command runs unchanged.
+Keyword search misses a note that says the same thing in other words. The optional semantic layer embeds each note's title, TL;DR and key claims with the frozen `all-MiniLM-L6-v2` encoder (about 90 MB, downloaded once to `~/.cache/scholia/models`). It needs `fastembed`, pinned in `requirements-semantic.txt`. Without it, `semantic` prints an install hint and every other command runs unchanged.
 
 ```bash
 uv run --no-project --with-requirements ~/Code/scholia/requirements-semantic.txt \
   ~/Code/scholia/bin/scholia semantic copying a big model into a tiny one
 ```
 
-## When and why, from a project's plan
+## Find when and why, from a project's plan
 
-`scholia history <terms>` searches one ntkit `plan/` folder, `_archive/` included, and needs no vault. `history.md` and `_archive/` only grow, so finding when and why something was decided or dropped otherwise means reading them by hand. Each top-level bullet or paragraph is one entry, dated from its own text, its heading, or its file name, ranked by relevance or newest first with `--chrono`.
+`scholia history <terms>` searches one ntkit `plan/` folder, `_archive/` included, and needs no vault. Each top-level bullet or paragraph is one entry, dated from its own text, its heading or its file name, ranked by relevance or newest first with `--chrono`.
 
 ```bash
 scholia history exporter dropped --plan ~/Code/myrepo --since 2026-09-01
@@ -75,16 +78,16 @@ scholia stats                                          # vault shape at a glance
 scholia-eval [--queries FILE] [--impl OLD]             # score retrieval on labelled questions
 ```
 
-The agent face is three skills in `skills/`: `/capture-nt <url | file>` writes and commits; `/ask-nt <question>` is read-only; `/panel-nt <question>` puts one question to several different models, keeps their answers apart, and ranks what comes back by how many proposed the same thing.
+The agent face is three skills in `skills/`. `/capture-nt <url | file>` writes and commits. `/ask-nt <question>` is read-only. `/panel-nt <question>` puts one question to several different models, keeps their answers apart, and ranks what comes back by how many proposed the same thing.
 
 ## Verify it yourself
 
 ```bash
-sh tests/smoke.sh     # 35 checks on a throwaway vault and plan/ folder; exit 0 = pass
+sh tests/smoke.sh     # 49 checks on a throwaway vault and plan/ folder; exit 0 = pass
 scholia-eval          # recall@10 and MRR@10 on <vault>/eval/queries.tsv
 ```
 
-The smoke test covers vault discovery, spelling-variant search, anchor checks, backlinks, entities, project matching, plan history search with no vault, the missing-fastembed path, and eight parallel rebuilds. Retrieval quality is only as good as your labels: `scholia-eval --pool` prints each question's candidates for judging, and `--impl` scores an older engine file with the same labels, so a ranking change gets a before and after.
+The smoke test covers vault discovery, spelling-variant search, anchor checks, backlinks, entities, project matching, plan history search with no vault, the missing-fastembed path, eight parallel rebuilds, and the `/panel-nt` runner's timeout, serial-group, retry and probe paths. Retrieval quality is only as good as your labels: `scholia-eval --pool` prints each question's candidates for judging, and `--impl` scores an older engine file with the same labels, so a ranking change gets a before and after.
 
 ## License
 
