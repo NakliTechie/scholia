@@ -31,7 +31,7 @@ Three skills do the work:
 | The agent skills (Claude Code) | `cp -r ~/Code/scholia/skills/* ~/.claude/skills/` |
 | A new vault | `cp -R ~/Code/scholia/template ~/Code/knowledge && cd ~/Code/knowledge && git init` |
 
-Run it anywhere inside the vault, or point at one with `--vault DIR` or `SCHOLIA_VAULT`. Every command rebuilds the index from your Markdown in well under a second, so it is never stale. Check the install and the vault:
+Run it anywhere inside the vault, or point at one with `--vault DIR` or `SCHOLIA_VAULT`. Each command first checks, by file size and modification time, whether any note changed. It rebuilds the index from your Markdown in well under a second only when one did, so it is never stale; `scholia build` always rebuilds. Check the install and the vault:
 
 ```bash
 scholia stats
@@ -91,11 +91,11 @@ The agent face is the three skills above, in `skills/`.
 ## Verify it yourself
 
 ```bash
-sh tests/smoke.sh     # 49 checks on a throwaway vault and plan/ folder; exit 0 = pass
+sh tests/smoke.sh     # 55 checks on a throwaway vault and plan/ folder; exit 0 = pass
 scholia-eval          # recall@10 and MRR@10 on <vault>/eval/queries.tsv
 ```
 
-The smoke test covers vault discovery, spelling-variant search, anchor checks, backlinks, entities, project matching, plan history search with no vault, the missing-fastembed path, eight parallel rebuilds, and the `/panel-nt` runner's timeout, serial-group, retry and probe paths. Retrieval quality is only as good as your labels: `scholia-eval --pool` prints each question's candidates for judging, and `--impl` scores an older engine file with the same labels, so a ranking change gets a before and after.
+The smoke test covers vault discovery, spelling-variant search, anchor checks, backlinks, entities, project matching, plan history search with no vault, the missing-fastembed path, eight parallel rebuilds, skipped and forced rebuilds, and the `/panel-nt` runner's timeout, serial-group, retry and probe paths. Retrieval quality is only as good as your labels: `scholia-eval --pool` prints each question's candidates for judging, and `--impl` scores an older engine file with the same labels, so a ranking change gets a before and after.
 
 ## License
 

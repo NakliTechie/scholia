@@ -158,6 +158,33 @@ else
   pass=$((pass + 1)); echo "ok   8 parallel rebuilds"
 fi
 
+# Skip-rebuild: an unchanged vault keeps its index; any change is seen.
+sk=$(mktemp -d)
+trap 'rm -rf "$v" "$p" "$h" "$sk"' EXIT
+cp -R "$here/template/." "$sk/"
+printf -- '---\ntitle: "Skip test"\ntags: [skip]\n---\n## TL;DR\nalpha1 marker word\n' > "$sk/sources/2026-01-01-skip-test.md"
+find "$sk" -name '*.md' -exec touch -t 202001010000 {} +   # old enough to be trusted
+ino() { python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_ino)' "$sk/.scholia.db"; }
+"$S" --vault "$sk" stats >/dev/null
+i1=$(ino)
+"$S" --vault "$sk" stats >/dev/null
+i2=$(ino)
+if [ "$i1" = "$i2" ]; then pass=$((pass + 1)); echo "ok   unchanged vault keeps its index"
+else fail=$((fail + 1)); echo "FAIL unchanged vault keeps its index (inode $i1 -> $i2)"; fi
+"$S" --vault "$sk" build >/dev/null
+i3=$(ino)
+if [ "$i2" != "$i3" ]; then pass=$((pass + 1)); echo "ok   scholia build always rebuilds"
+else fail=$((fail + 1)); echo "FAIL scholia build always rebuilds"; fi
+printf 'beta2 extra line\n' >> "$sk/sources/2026-01-01-skip-test.md"
+check "an appended line is searchable at once" "2026-01-01-skip-test" "$S" --vault "$sk" search beta2
+sed -i.bak 's/alpha1/alpha2/' "$sk/sources/2026-01-01-skip-test.md" && rm -f "$sk/sources/2026-01-01-skip-test.md.bak"
+check "a same-size in-place edit right after a build is seen" "2026-01-01-skip-test" "$S" --vault "$sk" search alpha2
+touch "$sk/notes/new-note-for-skip.md"
+printf -- '---\ntitle: "Added"\n---\ngamma3 added later\n' > "$sk/notes/new-note-for-skip.md"
+check "a new file is seen" "new-note-for-skip" "$S" --vault "$sk" search gamma3
+rm "$sk/notes/new-note-for-skip.md"
+check "a deleted file is gone" "no matches" "$S" --vault "$sk" search gamma3
+
 # panel-nt runner: groups, timeout, retry, probe (fake providers; offline).
 pn=$(mktemp -d)
 trap 'rm -rf "$v" "$p" "$h" "$pn"' EXIT

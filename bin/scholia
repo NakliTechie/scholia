@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """scholia — a derived, throwaway search index over a markdown vault.
 
-The markdown files are canonical. This database is a cache: it is rebuilt from
-scratch on every run that needs it, and it is gitignored. If it is ever deleted,
-lost, or suspected wrong, the fix is always `scholia build`.
+The markdown files are canonical. This database is a cache: a run that needs it
+rebuilds it from scratch unless a stat check shows nothing it was built from has
+changed, and it is gitignored. If it is ever deleted, lost, or suspected wrong,
+the fix is always `scholia build`, which rebuilds unconditionally.
 
 Which vault: `--vault DIR`, else $SCHOLIA_VAULT, else the nearest directory at
 or above the working directory that holds both sources/ and notes/.
 
 Stdlib only (sqlite3 with FTS5). No dependencies, no daemon, no incremental
 indexing -- a full rebuild of the whole vault takes well under a second, and
-that is what makes the whole class of staleness bugs impossible.
+the only shortcut is skipping it when a stat of every input says nothing moved
+(see `fresh`), so staleness bugs stay impossible by construction.
 
 One optional layer breaks the stdlib rule: `semantic` (and `--semantic` on
 related/orient) embeds passages with a frozen all-MiniLM-L6-v2 via fastembed.
@@ -259,6 +261,9 @@ DROP TABLE IF EXISTS notes_fts;
 DROP TABLE IF EXISTS linkstyle;
 DROP TABLE IF EXISTS fraglinks;
 DROP TABLE IF EXISTS urls;
+DROP TABLE IF EXISTS meta;
+-- what this index was built from; see stamp() and fresh()
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE notes (
   id INTEGER PRIMARY KEY, path TEXT, kind TEXT, slug TEXT,
   title TEXT, url TEXT, url_norm TEXT, author TEXT, source_type TEXT,
@@ -295,11 +300,62 @@ def build(verbose=True):
     return sqlite3.connect(DB_PATH)
 
 
+# Filesystems may store modification times in whole seconds (2 s on FAT). A file
+# whose mtime is this close to the moment a build started could be edited again
+# inside the same tick without its stat changing: git's "racy" rule. Such an
+# index is stored as untrusted, so the next run rebuilds once more.
+RACY_NS = 2_000_000_000
+
+
+def stamp():
+    """(digest, newest mtime in ns) of everything the index is built from,
+    read by stat only: this script, every content file's name, size and
+    mtime, and the names of the memory notes that links may resolve to."""
+    me = os.stat(__file__)
+    parts = [("code", me.st_size, me.st_mtime_ns), ("vault", str(VAULT))]
+    newest = 0
+    for kind in CONTENT_DIRS:
+        try:
+            entries = sorted(os.scandir(VAULT / kind), key=lambda e: e.name)
+        except OSError:
+            continue
+        for e in entries:
+            if e.name.endswith(".md"):
+                st = e.stat()
+                parts.append((kind, e.name, st.st_mtime_ns, st.st_size))
+                newest = max(newest, st.st_mtime_ns)
+    parts.append(("memory", tuple(sorted(memory_slugs()))))
+    return hashlib.sha1(repr(parts).encode()).hexdigest(), newest
+
+
+def fresh():
+    """True when the existing index was built from exactly what is on disk
+    now, and was not racy when it was built."""
+    if not DB_PATH.exists():
+        return False
+    try:
+        db = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        try:
+            meta = dict(db.execute("SELECT key, value FROM meta"))
+        finally:
+            db.close()
+        return meta.get("trusted") == "1" and meta.get("stamp") == stamp()[0]
+    except (sqlite3.Error, OSError):
+        return False
+
+
 def _build_into(path, verbose):
     t0 = time.time()
+    # Stamp first: an edit after this line changes the next stamp, so it can
+    # never be hidden by a build that read the file later.
+    built_ns = time.time_ns()
+    digest, newest = stamp()
     path.unlink(missing_ok=True)
     db = sqlite3.connect(path)
     db.executescript(SCHEMA)
+    db.executemany("INSERT INTO meta VALUES (?,?)", [
+        ("stamp", digest),
+        ("trusted", "1" if newest < built_ns - RACY_NS else "0")])
 
     files = []
     for kind in CONTENT_DIRS:
@@ -383,8 +439,8 @@ def _build_into(path, verbose):
 
 
 def connect(rebuild=True):
-    """Always rebuild by default. The index is never trusted to be current."""
-    if rebuild or not DB_PATH.exists():
+    """Rebuild unless a stat of every input shows the index is current."""
+    if rebuild and not fresh() or not DB_PATH.exists():
         return build(verbose=False)
     return sqlite3.connect(DB_PATH)
 

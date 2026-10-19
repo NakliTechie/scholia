@@ -54,6 +54,6 @@ Don't answer from grep snippets. **Open the top ~3–8 new notes** each round an
 - If coverage is **thin or stale** (one source, an old `captured` date): flag it, so the answer carries its own confidence.
 - If the question spans **realms**, say which realm the answer came from.
 
-`/ask-nt` is **read-only** — it never writes to the vault's notes. (`scholia` rebuilds `.scholia.db` and fills `.scholia.emb.db` on every run; both are gitignored caches, not vault content.) Capturing is a separate, deliberate step (`/capture-nt`).
+`/ask-nt` is **read-only** — it never writes to the vault's notes. (`scholia` rebuilds `.scholia.db` when a note changed and fills `.scholia.emb.db` as needed; both are gitignored caches, not vault content.) Capturing is a separate, deliberate step (`/capture-nt`).
 
 The one rule this command exists to enforce: **answer from the vault, with receipts.** A confident answer with no citation — or one built from outside knowledge dressed up as a captured note — defeats the point. The whole value is that you can trust the answer because you can trace it.

@@ -21,7 +21,7 @@ If `$VAULT` doesn't exist, stop and say so — this command captures _into_ an e
 ## Step 2 — Orient (before fetching — this is the cheap step that saves the expensive one)
 **Run this before you fetch anything.** Its job is to answer three questions in one shot: do we already have this, what is it near, and what should it be labelled. Skipping it is how the same source gets fetched twice and filed under a fresh tag nobody else uses.
 
-If the `scholia` command is installed (`command -v scholia`), use it — it rebuilds its index from the markdown on every run, so it is never stale:
+If the `scholia` command is installed (`command -v scholia`), use it — it rebuilds its index from the markdown whenever a note has changed, so it is never stale:
 ```bash
 scholia --vault "$VAULT" orient "<the url, path, or title>"
 ```
