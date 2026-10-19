@@ -15,6 +15,14 @@
 
 ![A /capture-nt run that files a link as a source note and commits it, and an /ask-nt answer that cites the note it used](marketing/social.png)
 
+Three skills do the work:
+
+| Skill | What it does |
+|---|---|
+| `/capture-nt <url \| file>` | **Add.** Checks the vault first, writes a source note, saves the text, links it into a topic, commits. |
+| `/ask-nt <question>` | **Query.** Read-only. Answers only from your vault, in at most four search rounds, and cites every note it used. |
+| `/panel-nt <question>` | **Second opinions.** Puts one question to several different models, keeps their answers apart, ranks what comes back by how many proposed the same thing. |
+
 ## Install
 
 | What | Command |
@@ -78,7 +86,7 @@ scholia stats                                          # vault shape at a glance
 scholia-eval [--queries FILE] [--impl OLD]             # score retrieval on labelled questions
 ```
 
-The agent face is three skills in `skills/`. `/capture-nt <url | file>` writes and commits. `/ask-nt <question>` is read-only. `/panel-nt <question>` puts one question to several different models, keeps their answers apart, and ranks what comes back by how many proposed the same thing.
+The agent face is the three skills above, in `skills/`.
 
 ## Verify it yourself
 
