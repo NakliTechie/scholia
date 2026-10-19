@@ -11,7 +11,7 @@ Use this when the question is "what published technique fits this bottleneck?", 
 Write these five lines in the prompt file. Without all five, do not run the panel.
 1. **The structure.** What the data is (a graph, a sorted list, a decision diagram, a matrix of this shape), in words a stranger would understand.
 2. **The operation.** What is repeated, and what is expensive about it.
-3. **The numbers.** Input sizes, the current time or memory, and where the worst case comes from. One measured number beats three adjectives.
+3. **The numbers.** Input sizes, the current time or memory, and where the worst case comes from. One measured number beats three adjectives. Give the split by phase (a profile, even a rough one), and state any fact that bounds a gain, such as "all inserts already run in one transaction". Without it, answers cite a famous speed-up that your code already has.
 4. **The constraint.** Language, no new dependencies, must stay exact or may approximate, must keep the output format.
 5. **Already tried or ruled out.** So answers do not repeat it.
 
@@ -32,13 +32,16 @@ For each give, in at most 6 short lines:
 (d) the smallest change that tries it (what to replace, roughly how many lines),
 (e) the benchmark that decides it: the input, the baseline, and the number that counts as a win,
     plus the input where it would lose.
-No hype. If you are not sure the technique exists under that name, say so.
+Mark every number as published (with where) or estimated by you. No hype. If you are not sure the technique exists under that name, say so.
 ```
 
 ## Step M3 — Run and synthesise
 Run steps 3 to 6 of `SKILL.md` unchanged (panel, run, read critically, cluster). Two changes:
 - **Cluster by technique, not by wording.** "Memoised cover extraction" and "ISOP recurrence" may be one idea; check before merging.
-- **The hook to verify is the citation.** For every top technique, confirm the named source exists and says what the answer claims (the complexity, the table). Drop a technique whose citation cannot be found. For depth, hand the top two or three to a citation-checked research run if you have one.
+- **Rank the obvious and the surprising separately.** When every answer proposes the same technique, that is consensus: it says the profile already pointed there. List techniques proposed by one or two answers with a checkable citation in their own group; they are where a panel adds something.
+- **The hook to verify is the citation.** For every top technique, confirm the named source exists and says what the answer claims (the complexity, the table). Drop a technique whose citation cannot be found. Check the specific claim (a quoted sentence, a table, a number), not only that the title exists: answers misquote real documents, and attach a real paper to a different mechanism than the one it describes (a build-systems paper's content-hash traces named as if they were modification-time checks). Also check the code-level premise each top technique relies on ("your inserts are not batched") against your own source before writing its spec. For depth, hand the top two or three to a citation-checked research run if you have one.
+
+Mine prompts are long and ask for citations, so the slowest providers take several minutes; allow at least 300 s for a coding-agent CLI and expect one or two providers to time out or hit an upstream overload.
 
 ## Step M4 — Benchmark spec before code
 For each surviving technique, write a spec, not an implementation:
