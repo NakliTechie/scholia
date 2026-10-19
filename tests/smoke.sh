@@ -158,5 +158,55 @@ else
   pass=$((pass + 1)); echo "ok   8 parallel rebuilds"
 fi
 
+# panel-nt runner: groups, timeout, retry, probe (fake providers; offline).
+pn=$(mktemp -d)
+trap 'rm -rf "$v" "$p" "$h" "$pn"' EXIT
+P="$here/skills/panel-nt/scripts/panel.py"
+echo "a prompt" > "$pn/prompt.md"
+cat > "$pn/panel.toml" <<TOML
+[defaults]
+timeout = 2
+retry = 1
+[[provider]]
+name = "fine"
+cmd = ["sh", "-c", "echo PONG an answer"]
+[[provider]]
+name = "slow"
+cmd = ["sh", "-c", "sleep 8; echo late"]
+[[provider]]
+name = "broken"
+cmd = ["sh", "-c", "exit 3"]
+[[provider]]
+name = "flaky"
+cmd = ["sh", "-c", "if [ -f $pn/flag ]; then echo second try; else touch $pn/flag; exit 1; fi"]
+[[provider]]
+name = "s1"
+group = "shared"
+cmd = ["sh", "-c", "echo s1 >> $pn/trace; sleep 1; echo s1 >> $pn/trace; echo ok"]
+[[provider]]
+name = "s2"
+group = "shared"
+cmd = ["sh", "-c", "echo s2 >> $pn/trace; sleep 1; echo s2 >> $pn/trace; echo ok"]
+TOML
+python3 "$P" run --prompt "$pn/prompt.md" --out "$pn/out" --config "$pn/panel.toml" > "$pn/table.txt" 2>&1 || true
+check "panel: answered provider is ok"            "ok"              grep "^fine" "$pn/table.txt"
+check "panel: stalled provider times out"          "timeout"         grep "^slow" "$pn/table.txt"
+check "panel: failing provider reports error"      "error"           grep "^broken" "$pn/table.txt"
+check "panel: error is retried once and then ok"   "attempts 2"      grep "^flaky" "$pn/table.txt"
+check "panel: shared group runs one at a time"     "s1 s1 s2 s2"     sh -c "tr '\\n' ' ' < '$pn/trace' | sed 's/s2 s2 s1 s1/s1 s1 s2 s2/'"
+check "panel: answer file written"                 "an answer"       cat "$pn/out/fine.out"
+check "panel: status.json written"                 "timeout"         cat "$pn/out/status.json"
+cat > "$pn/probe.toml" <<TOML
+[[provider]]
+name = "pongs"
+cmd = ["sh", "-c", "echo PONG"]
+[[provider]]
+name = "mute"
+cmd = ["sh", "-c", "echo hello"]
+TOML
+python3 "$P" run --prompt "$pn/prompt.md" --out "$pn/out2" --config "$pn/probe.toml" --probe > "$pn/table2.txt" 2>&1 || true
+check "panel: --probe drops a provider that does not answer" "probe-failed" grep "^mute" "$pn/table2.txt"
+check "panel: missing config -> message"           "no config found"  env -u PANEL_CONFIG HOME="$pn/nohome" python3 "$P" list --config "$pn/none.toml"
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

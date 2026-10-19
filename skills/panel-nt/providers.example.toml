@@ -1,0 +1,29 @@
+# Example providers for panel.py. Names, commands and model ids are indicative:
+# replace them with the CLIs you have and the model ids they currently offer
+# (model lists change often, so keep ids in this file, not in the skill).
+
+[defaults]
+timeout = 240        # seconds per provider
+probe_timeout = 60
+retry = 1            # one serial retry for providers that errored
+
+# A coding-agent CLI with a non-interactive mode. One provider per model.
+[[provider]]
+name  = "agent-cli-large"
+cmd   = ["agent-cli", "exec", "--read-only", "--model", "{model}", "{prompt}"]
+model = "<model-id>"
+
+# A gateway CLI that hosts several free or cheap models. These share one local
+# state (a database or session store), so put them in one group: they run one
+# at a time, while other groups run alongside.
+[[provider]]
+name  = "gateway-model-a"
+cmd   = ["gateway-cli", "run", "-m", "<provider>/<model-a>", "{prompt}"]
+group = "gateway"
+timeout = 150
+
+[[provider]]
+name  = "gateway-model-b"
+cmd   = ["gateway-cli", "run", "-m", "<provider>/<model-b>", "{prompt}"]
+group = "gateway"
+timeout = 150

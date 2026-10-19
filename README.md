@@ -75,7 +75,7 @@ scholia stats                                          # vault shape at a glance
 scholia-eval [--queries FILE] [--impl OLD]             # score retrieval on labelled questions
 ```
 
-The agent face is the two skills in `skills/`: `/capture-nt <url | file>` writes and commits; `/ask-nt <question>` is read-only.
+The agent face is three skills in `skills/`: `/capture-nt <url | file>` writes and commits; `/ask-nt <question>` is read-only; `/panel-nt <question>` puts one question to several different models, keeps their answers apart, and ranks what comes back by how many proposed the same thing.
 
 ## Verify it yourself
 
