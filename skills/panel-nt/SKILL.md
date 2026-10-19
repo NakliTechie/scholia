@@ -1,6 +1,6 @@
 ---
 description: "Put one question to several different models, collect their answers independently, and synthesise a ranked, sourced shortlist. Third-party providers see public material only."
-argument-hint: "<question or topic>  [--light | --size N]"
+argument-hint: "<question or topic>  [--light | --size N | --mine]"
 allowed-tools: ["Bash", "Read", "Write", "Glob", "Grep", "Agent"]
 entry: "a question, and at least two model CLIs or subagents available"
 exit: "raw answers saved, a ranked top-N file with vote counts and kill conditions, and a one-screen report"
@@ -10,6 +10,8 @@ writes: "a panel folder (prompt, raw answers, status, top-N); a vault note only 
 Ask several models the same question and learn from where they agree and where they split. `/panel-nt` is for questions that have no single answer: ideas, connections, risks, where to apply something. It is not for facts you can look up, and it is not a vote on what is true.
 
 **Light mode** (`--light`) is the version `/capture-nt` runs after a capture: two or three providers, one short prompt, a few bullets back. Everything below describes the full mode; light mode skips steps 4 and 6 and keeps the rest.
+
+**Mine mode** (`--mine`) is for one narrow question: which published technique fits a slow or costly spot in your code. It swaps the prompt for one that demands named techniques with citations, makes the citation the claim you verify, and ends with a benchmark spec per technique instead of an idea list. Read `references/mine.md` first; it replaces steps 1 and 2 and adds a benchmark-spec step after step 6.
 
 ## Step 1 — Pin the question
 Write one sentence for what you want ("five best ideas for X", "where would Y help", "what would a skeptic test first"). Check what you already know first: run `scholia orient "<topic>"` or `/ask-nt` so the prompt does not ask for what the vault already holds, and so the synthesis can link neighbours.
