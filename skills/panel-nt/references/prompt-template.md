@@ -11,10 +11,16 @@ that says where it would NOT help, and why. For each give, in at most 5 short li
 (a) name, (b) what is built or done and what the user sees, (c) why it beats the obvious
 alternative, (d) the cheapest first build and what it needs, (e) the metric that decides it and what
 could kill it. Prefer work one person can do in days. Be concrete and sceptical. No hype, no preamble.
+
+Wildcard. After the five, add one more idea, labelled WILDCARD, that you expect the other answers to
+miss. Give the same fields (a) to (e), and one sentence on why it is unusual. It may be a premise
+challenge or a risk, not only a technique. If you have nothing, write WILDCARD: none.
 ```
 
 Notes
 - Keep Context A to what the models cannot guess. Put numbers in it; models anchor on them.
 - Say what has been ruled out; otherwise every answer repeats it.
 - A fixed format makes clustering possible. Do not let answers choose their own structure.
-- Light mode: shorten Context B to one line and ask for four to six bullets.
+- The wildcard turns outliers into something deliberate: each is labelled and comes with the model's
+  own reason, and the synthesis can treat them as a group (see `synthesis.md`, the outlier pass).
+- Light mode: shorten Context B to one line and ask for four to six bullets, and drop the wildcard.

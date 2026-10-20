@@ -309,8 +309,11 @@ RACY_NS = 2_000_000_000
 
 def stamp():
     """(digest, newest mtime in ns) of everything the index is built from,
-    read by stat only: this script, every content file's name, size and
-    mtime, and the names of the memory notes that links may resolve to."""
+    read by stat only: this script, every content file's name, size, mtime,
+    ctime and inode, and the names of the memory notes that links may resolve
+    to. A change that leaves all of these as they were (a same-size edit whose
+    mtime is put back, with ctime also forged) is not seen; `scholia build`
+    always rebuilds."""
     me = os.stat(__file__)
     parts = [("code", me.st_size, me.st_mtime_ns), ("vault", str(VAULT))]
     newest = 0
@@ -322,8 +325,11 @@ def stamp():
         for e in entries:
             if e.name.endswith(".md"):
                 st = e.stat()
-                parts.append((kind, e.name, st.st_mtime_ns, st.st_size))
-                newest = max(newest, st.st_mtime_ns)
+                # ctime cannot be set back by utime or `cp -p`, so an edit that
+                # keeps the size and restores the old mtime still changes the stamp.
+                parts.append((kind, e.name, st.st_mtime_ns, st.st_size,
+                              st.st_ctime_ns, st.st_ino))
+                newest = max(newest, st.st_mtime_ns, st.st_ctime_ns)
     parts.append(("memory", tuple(sorted(memory_slugs()))))
     return hashlib.sha1(repr(parts).encode()).hexdigest(), newest
 

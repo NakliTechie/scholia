@@ -33,6 +33,7 @@ For each give, in at most 6 short lines:
 (e) the benchmark that decides it: the input, the baseline, and the number that counts as a win,
     plus the input where it would lose.
 Mark every number as published (with where) or estimated by you. No hype. If you are not sure the technique exists under that name, say so.
+Then one more, labelled WILDCARD, with the same fields: a technique or a premise challenge you expect the other answers to miss, and one sentence on why it is unusual. Write WILDCARD: none if you have none.
 ```
 
 ## Step M3 — Run and synthesise

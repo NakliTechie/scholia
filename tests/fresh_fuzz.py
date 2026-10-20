@@ -46,8 +46,8 @@ def files(vault):
 
 
 def change(vault, rng, n):
-    kind = rng.choice(("append", "samesize", "add", "delete", "rename",
-                       "touchall", "nothing"))
+    kind = rng.choice(("append", "samesize", "restoremtime", "add", "delete",
+                       "rename", "touchall", "nothing"))
     fs = files(vault)
     if kind == "append":
         with rng.choice(fs).open("a") as f:
@@ -58,6 +58,15 @@ def change(vault, rng, n):
         i = text.find("e", len(text) // 2)
         if i >= 0:
             p.write_text(text[:i] + "E" + text[i + 1:], encoding="utf-8")
+    elif kind == "restoremtime":
+        # a same-size edit that puts the old modification time back
+        p = rng.choice(fs)
+        st = p.stat()
+        text = p.read_text(encoding="utf-8", errors="replace")
+        i = text.find("a", len(text) // 2)
+        if i >= 0:
+            p.write_text(text[:i] + "A" + text[i + 1:], encoding="utf-8")
+            os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
     elif kind == "add":
         (vault / "notes" / f"fuzz-{n}.md").write_text(
             f'---\ntitle: "Fuzz {n}"\ntags: [fuzz]\n---\nbody {n} model\n')

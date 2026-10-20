@@ -51,7 +51,7 @@ Patterns that keep a sweep healthy (the runner implements the first three):
 Read every answer file and `status.json`. Note who answered, who failed and how (`timeout`, `error`, `empty`, `probe-failed`); a failure is data about the setup, not about the question. Drop restatements and hype. An answer that gives no first test or no kill condition is weaker, whatever its confidence.
 
 ## Step 6 — Synthesise
-Follow `references/synthesis.md`. In short: cluster ideas that say the same thing; rank by **how many independent answers proposed it**, then by fit with the asker's constraints; keep each cluster's strongest kill condition and cheapest test; verify one concrete claim per top idea against its source before ranking it (answers often cite the wrong table, page or version); keep a section for "where it would not help"; say how many answers each idea had and who they were. Save `top<N>.md` beside the raw answers. Never rewrite a model's answer file.
+Follow `references/synthesis.md`. In short: cluster ideas that say the same thing; rank by **how many independent answers proposed it**, then by fit with the asker's constraints; keep each cluster's strongest kill condition and cheapest test; verify one concrete claim per top idea against its source before ranking it (answers often cite the wrong table, page or version); keep a section for "where it would not help"; say how many answers each idea had and who they were. Then run the outlier pass in the same file: log every idea only one answer proposed in `outliers.md`, judge them on a cheap test, a checkable hook, distance from the consensus and stakes (a blind judge in full mode, never the proposer), and promote at most two as "Worth a look". Save `top<N>.md` and `outliers.md` beside the raw answers. Never rewrite a model's answer file.
 
 Every claim from a model is a claim, not a fact. Label unverified items as such.
 
@@ -62,6 +62,7 @@ Panel → <folder>
   answered:   <n of m>  (<providers by name>)
   failed:     <name: state, ...>        (or "none")
   top <N>:    1. <idea> (<k of n>)  2. ...
+  worth a look: <up to two outliers, each "1 of n", with its cheapest test>   (outliers logged: <count>)
   not useful: <one line>
   checked:    <the claims you verified, and what you found>
   next:       <what you would do first>

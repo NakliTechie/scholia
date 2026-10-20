@@ -91,7 +91,7 @@ The agent face is the three skills above, in `skills/`.
 ## Verify it yourself
 
 ```bash
-sh tests/smoke.sh     # 55 checks on a throwaway vault and plan/ folder; exit 0 = pass
+sh tests/smoke.sh     # 56 checks on a throwaway vault and plan/ folder; exit 0 = pass
 scholia-eval          # recall@10 and MRR@10 on <vault>/eval/queries.tsv
 ```
 
