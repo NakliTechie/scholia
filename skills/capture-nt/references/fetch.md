@@ -7,11 +7,19 @@ Pick the tool by source type — the goal is the readable text + key media, not 
 | Login-gated (x.com, paywalled, LinkedIn, …) | **Chrome MCP** (`mcp__Claude_in_Chrome__*`) — drives the user's logged-in browser: navigate, then `get_page_text` / `read_page` |
 | PDF (link or local file) | the **`pdf`** skill — extract the **full text**; if it's a **scanned / image PDF** (no text layer), **OCR it** so it's searchable. Capture tables + figure captions where present. |
 | `.docx` / Word (link or local file) | the **`docx`** skill — full text + structure (headings, tables) |
-| Video (YouTube, …) | fetch the page for title + description, plus transcript if present; else summarize from what's available and note the gap |
+| Video (YouTube, …) | fetch the page for title + description, **and the transcript with `yt-dlp`** (below); save it as `assets/<slug>-transcript.txt` and link it as `Transcript:`. If no subtitles exist, summarize from what's available and note the gap |
 | GitHub repo | `gh repo view <owner>/<repo>` for stars / desc / license; WebFetch the README for detail |
 | claude.ai chat share (`claude.ai/share/<id>`) | **WebFetch**; fall back to the Chrome MCP if the share page doesn't render. Extract the **full transcript**, strip UI chrome, and **keep the Human/Assistant turn structure** — the alternation is the content. |
 
 **Extract completely.** The goal is the _whole_ readable text, not an abstract or first page — so the note (and any future full-text search) sees everything. For a long PDF / doc, also **save the extracted (OCR'd) text to `$VAULT/assets/<slug>.txt`** alongside the binary, so the full text is grep-able, not just your summary.
+
+**Video transcripts (`yt-dlp`).** Works for YouTube and most video hosts yt-dlp supports, needs no login, and runs in cloud sessions (`pip install yt-dlp` if missing). Ask for uploaded subtitles first, and fall back to auto-generated ones only when there are none, because one request per language helps avoid YouTube's HTTP 429 rate limit:
+```bash
+yt-dlp -q --skip-download --write-subs --no-write-auto-subs --sub-langs "en.*" --sub-format vtt -o "%(id)s.%(ext)s" "<url>" \
+  || true
+ls <id>.*.vtt || yt-dlp -q --skip-download --write-auto-subs --sub-langs "en" --sub-format vtt -o "%(id)s.%(ext)s" "<url>"
+```
+Convert the `.vtt` to plain text: strip timing lines and tags, drop consecutive duplicate lines (auto captions repeat each line as they scroll), and keep a `[mm:ss]` mark about once a minute so claims can be located. Head the asset with the video URL, whether the subtitles were uploaded or auto-generated, and the fetch date; auto-generated text has recognition errors in names and numbers, so check those against the page or slides before quoting. Fetching several videos: wait a random 20–45 s between them. For a non-English video, request that language (`--sub-langs "ja.*"`) and say so in the note.
 
 If a fetch fails (login wall, JS-only page), fall back to the Chrome MCP before giving up. If even that fails, capture a **stub** (`status: inbox`) with the URL and what you know — and say so. Never fabricate content.
 
