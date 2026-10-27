@@ -12,6 +12,7 @@ Searched and checked with [scholia](https://github.com/NakliTechie/scholia): `sc
 | `sources/` | One note per **external** source (article, tweet, PDF, video, repo). What _they_ said. | "What did this source actually claim?" |
 | `notes/` | Atomic **evergreen** notes — _your_ synthesis, conclusions, reusable insights. | "What do _I_ think / know?" |
 | `topics/` | **MOCs** (Maps of Content) — curated hub notes per theme. | "Show me everything on X." |
+| `glossary/` | One file per **term**: a plain-English definition, linked to its topics, related terms and the sources that use it. Optional; delete the folder to opt out. | "What does this word mean?" |
 | `assets/` | PDFs, saved HTML, images — the binary payloads notes point at. | "Where's the actual file?" |
 
 ## The core principle: separate source from synthesis
@@ -91,6 +92,23 @@ updated: 2026-06-21
 ---
 ```
 Body = a curated index that links the relevant sources and notes, each with a **one-line annotation** saying why it's there. A MOC is hand-tended, not auto-generated — the curation _is_ the value.
+
+### Glossary-term frontmatter
+```yaml
+---
+title: Sparse autoencoder (SAE)        # the term as a reader would look it up
+aliases: [SAE, sparse autoencoders]     # abbreviations, plurals, other spellings
+summary: One sentence a newcomer can act on.
+topics: [interpretability]              # topic MOC slugs
+related: [superposition]                # other glossary slugs
+domain: knowledge
+added: 2026-06-21
+---
+```
+Body = one to three short paragraphs in plain English: what it is, why it matters, how it differs from its neighbours. End with `Source: [[source-slug]]` lines. `/capture-nt` maps each capture's key terms here: it adds the new source to an existing term, or writes a new term.
+- **Write for anyone.** If you publish the glossary, a definition must not name local paths, private projects or private people.
+- **Filename** = kebab-case of the term, no date, never the same as a source, note or topic filename.
+- **Topic MOCs** list their terms under a `## Glossary` heading, one line each.
 
 ### Linking
 - `[[slug]]` — wikilink by filename without the `.md` (`[[text-coder-plus-multimodal-qa]]`).

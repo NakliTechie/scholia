@@ -51,10 +51,11 @@ On entering a step, read its Detail file first, then act; the Outcome column is 
 | 5 Metadata | slug · publish-date prefix · `source_type` · `domain` (`knowledge` unless clearly personal or work; ask when sensitive; a `personal` note also gets tag `private`, a `work` note tag `work` — `scholia doctor` checks it) · tags reused from the vault first · author · published. Chat sessions add `platform`, `session_date`, `capture_mode`. | `references/note-schema.md` |
 | 6 Source note | `sources/<date>-<slug>.md` with the vault frontmatter and, in order: TL;DR · Key claims & data · Quotes · Why it matters / connections · Open questions · raw link. What they said, not your opinion. | `references/note-schema.md` |
 | 7 Link | One annotated line under the right topic MOC's `## Sources` — normally the MOC Step 2 already named (reuse a MOC before creating one); a backlink from the note; the MOC's `updated:` bumped. | `references/note-schema.md` |
+| 7b Glossary | Every term a reader would look up and the capture explains (usually 1–5) **maps to a glossary entry**: an existing term gets this note added to its `Source:` lines; a missing one gets a new `glossary/<term>.md` in plain English, listed under the topic MOC's `## Glossary`. Search titles and aliases before creating. Skipped when the vault has no `glossary/` folder, and for `personal` or `work` captures. | `references/note-schema.md` |
 | 8 Promote | An evergreen note in `notes/` only when the source shifts the user's thinking, offered by default for a chat capture file. Ask before creating unless already told to. | `references/note-schema.md` |
 
 ## Step 9 — Commit & push (automatic)
-Capture isn't done until it's saved. Keep an explicit list of the repo-relative file paths changed by this capture — the source note, any new / updated topic MOC, a promoted note, any saved `assets/` file. List individual files, never whole directories or globs. Preserve unrelated worktree and index changes.
+Capture isn't done until it's saved. Keep an explicit list of the repo-relative file paths changed by this capture — the source note, any new / updated topic MOC, any new / updated glossary term, a promoted note, any saved `assets/` file. List individual files, never whole directories or globs. Preserve unrelated worktree and index changes.
 
 Stage and commit only those paths, then push, no prompt. Populate `capture_paths` from the files actually changed; the two paths below are examples:
 ```bash
@@ -64,7 +65,7 @@ git -C "$VAULT" --literal-pathspecs commit --only -m "Capture: <title>" -- "${ca
 git -C "$VAULT" push
 ```
 - `--only` keeps unrelated files already staged in the index out of this commit; leave those staged changes intact.
-- Include only capture-owned files under `sources/`, `notes/`, `topics/`, or `assets/` — `plan/` is gitignored and stays local.
+- Include only capture-owned files under `sources/`, `notes/`, `topics/`, `glossary/`, or `assets/` — `plan/` is gitignored and stays local.
 - If there's **no `origin`** or the **push fails** (offline / auth), keep the local commit and say so — never lose the capture.
 - Pushes to the **private** remote regardless of realm — by design, no waiting. Every realm is pushed; the vault's policy (2026-09-24, `$VAULT/README.md` → Realms) is one private repo, with personal/work notes marked by tag rather than kept off the remote.
 
@@ -103,6 +104,7 @@ Captured → sources/<date>-<slug>.md  (<new|updated>)
   tags:   <N reused / M newly coined>
   topic:  topics/<theme>.md
   links:  <N followed / M flagged>     (for listicles)
+  glossary: <N new / M mapped to existing>  (or "skipped — <reason>")
   note:   notes/<slug>.md              (if promoted)
   status: <processed|inbox>
   pushed: <short-sha> → origin         (or "local only — <reason>")
