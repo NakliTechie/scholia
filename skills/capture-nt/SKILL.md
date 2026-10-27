@@ -31,7 +31,7 @@ It prints three blocks, and you act on each:
 2. **`== nearby in the vault ==`** — the notes this one will sit beside. Read the top 2–3 before writing; they tell you what the vault already knows, so the new note can link to them (Step 7) and say what is genuinely *new* rather than restating a neighbour. Neighbours also catch the subtler duplicate: the same paper captured earlier under a different URL.
 3. **`reuse these tags`** — the tags the neighbours already carry. **Reuse from this list before coining anything new.** A tag used once is nearly useless for retrieval; the whole point of the list is to stop tag cardinality drifting up. Coin a new tag only when nothing offered fits, and prefer an existing broader tag over a novel narrow one.
 
-It also names **candidate topic MOCs** — that is your Step 7 target, decided before you write rather than after.
+It also names **candidate topic MOCs** — that is your Step 7 target, decided before you write rather than after. When the vault keeps a `glossary/`, a last block lists **glossary terms** that match by title, alias or summary: the entries Step 7b maps to before creating new ones.
 
 **Fallback when the index isn't installed** (no `scholia` on PATH), do it by hand:
 ```bash

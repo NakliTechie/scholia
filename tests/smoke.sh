@@ -79,6 +79,23 @@ EOF2
 check "orient matches a block-list alt_urls entry" "ALREADY CAPTURED" "$S" --vault "$v" orient https://x.com/other/status/456
 check "orient still says new for an unknown url" "new capture" "$S" --vault "$v" orient https://example.com/other
 check "orient without a url skips the check" "no URL given" "$S" --vault "$v" orient Example Paper licensing
+cat > "$v/glossary/copyleft.md" <<'EOF'
+---
+title: Copyleft
+aliases: [share-alike, GPL-style licence]
+summary: A licence that requires derived works to carry the same licence.
+topics: []
+related: []
+domain: knowledge
+added: 2026-01-02
+---
+A copyleft licence lets anyone reuse the code on condition that changes are shared under the same terms.
+
+Source: [[2026-01-01-example-paper]].
+EOF
+check "orient lists a glossary term by its alias" "glossary/copyleft.md" "$S" --vault "$v" orient https://example.com/new share-alike
+check "orient shows the term's summary" "derived works" "$S" --vault "$v" orient copyleft
+check "search --kind glossary finds a term" "copyleft" "$S" --vault "$v" search copyleft --kind glossary
 check "doctor flags the broken anchor" "#^no-such-claim" "$S" --vault "$v" doctor
 check "backlinks show the cited anchor" "cites: #^mit-most-common" "$S" --vault "$v" backlinks 2026-01-01-example-paper
 check "entity lists the naming passage" "MIT is the most common" "$S" --vault "$v" entity MIT

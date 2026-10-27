@@ -55,11 +55,11 @@ For a **dropped PDF / doc / image**, keep the file under `$VAULT/assets/` and po
 Skip this step when `$VAULT/glossary/` does not exist (the vault does not keep a glossary), or when the capture's `domain` is `personal` or `work`. Otherwise, every capture maps its terms to glossary entries:
 
 1. **Pick the terms.** Choose the technical terms a reader would look up and that this source explains or uses centrally: usually 1–5. Skip everyday words and terms the source only mentions in passing.
-2. **Map before creating.** For each term, search titles and aliases:
+2. **Map before creating.** Start from the `== glossary terms ==` block that Step 2's `orient` printed. Then search each term you picked, by title, alias or summary:
    ```bash
-   rg -il -e "^title: .*<term>" -e "^aliases: .*<term>" "$VAULT/glossary/"
-   ls "$VAULT/glossary/"
+   scholia --vault "$VAULT" search "<term>" --kind glossary
    ```
+   Without `scholia`, use `rg -il -e "^title: .*<term>" -e "^aliases: .*<term>" "$VAULT/glossary/"`.
    Try the abbreviation and the spelled-out form. A match is the same entry: add `[[<source-slug>]]` to its `Source:` line, add the term's topic to `topics:` if missing, and change nothing else unless the source corrects the definition. When it does, edit the definition and say so in the confirm.
 3. **Create what is missing.** Write `glossary/<term-kebab>.md` with the vault's glossary frontmatter (`$VAULT/README.md` → Glossary-term frontmatter): `title` as a reader would look it up, `aliases` (abbreviations, plurals, other spellings), a one-sentence `summary`, `topics` (the MOC Step 7 used), `related` (other glossary slugs), `domain: knowledge`, `added`. Body: one to three short paragraphs in plain English (what it is, why it matters, how it differs from its neighbours), then `Source: [[<source-slug>]]`. The filename has no date and must differ from every source, note and topic filename.
 4. **Write for anyone.** A glossary may be published, so a definition names no local paths, private projects, private people or vault-only labels. Describe the idea, not this capture.

@@ -73,7 +73,7 @@ scholia history exporter dropped --plan ~/Code/myrepo --since 2026-09-01
 ```bash
 scholia search <terms> [--kind --tag --realm --since]  # ranked: all terms first, then any term
 scholia related <slug | free text> [--semantic]        # neighbours by text, tags and links
-scholia orient <url | path>                            # before a capture: already held? what is near?
+scholia orient <url | path>                            # before a capture: already held? what is near? which glossary terms?
 scholia projects <slug | text> [--dir DIR]             # after a capture: which projects it bears on
 scholia history <terms> [--plan DIR --since --chrono]  # no vault: when and why, from a plan/ folder
 scholia semantic <text>                                # optional: nearest notes by meaning
@@ -91,7 +91,7 @@ The agent face is the three skills above, in `skills/`.
 ## Verify it yourself
 
 ```bash
-sh tests/smoke.sh     # 56 checks on a throwaway vault and plan/ folder; exit 0 = pass
+sh tests/smoke.sh     # 59 checks on a throwaway vault and plan/ folder; exit 0 = pass
 scholia-eval          # recall@10 and MRR@10 on <vault>/eval/queries.tsv
 ```
 

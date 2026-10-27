@@ -47,13 +47,13 @@ SEMANTIC_HINT = (
     f"    uv run --no-project --with-requirements {REQS} "
     f"{HOME / 'bin/scholia'} semantic <text>\n"
     f"  or: pip install -r {REQS}")
-CONTENT_DIRS = ("sources", "notes", "topics")
+CONTENT_DIRS = ("sources", "notes", "topics", "glossary")
 
 # Frontmatter keys we lift into columns. Everything else is ignored.
 SCALARS = (
     "title", "url", "author", "source_type", "captured", "published",
     "domain", "status", "rating", "created", "updated", "type",
-    "platform", "session_date", "capture_mode",
+    "platform", "session_date", "capture_mode", "summary",
 )
 
 WIKILINK = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]*)?\]\]")
@@ -214,7 +214,7 @@ def parse_frontmatter(text):
         if key == "tags":
             tags = [t.strip().strip("\"'") for t in val.strip("[]").split(",")]
             tags = [t for t in tags if t]
-        elif key == "alt_urls":
+        elif key in ("alt_urls", "aliases"):
             alts = [u.strip().strip("\"'") for u in val.strip("[]").split(",")]
             meta[key] = [u for u in alts if u]
         elif key in SCALARS:
@@ -382,7 +382,8 @@ def _build_into(path, verbose):
         slug = path.stem
         # Block IDs are addressing, not content: keep them out of the FTS text.
         indexed = BLOCK_ID.sub("", body)
-        tldr = section(indexed, "TL;DR")
+        # A glossary term has no TL;DR; its one-line `summary` plays that role.
+        tldr = section(indexed, "TL;DR") or meta.get("summary", "")
         url = meta.get("url", "")
         cur = db.execute(
             "INSERT INTO notes (path,kind,slug,title,url,url_norm,author,"
@@ -430,7 +431,8 @@ def _build_into(path, verbose):
                         or resolves_to_memory(canon_target(f), mem)])
         db.execute("INSERT INTO notes_fts (rowid,slug,title,tags,tldr,body) "
                    "VALUES (?,?,?,?,?,?)",
-                   (nid, slug.replace("-", " "), meta.get("title", ""),
+                   (nid, slug.replace("-", " "),
+                    " ".join([meta.get("title", ""), *meta.get("aliases", [])]),
                     " ".join(tags), tldr, indexed))
         rows += 1
 
@@ -869,8 +871,12 @@ def cmd_orient(args):
               "pass the source URL to check it\n")
 
     print("== nearby in the vault (label and link against these) ==")
-    rel = _related(db, None, target.replace("/", " ").replace("-", " "),
-                   set(), args.limit, semantic=args.semantic)
+    words = target.replace("/", " ").replace("-", " ")
+    # Glossary terms get their own block below, so they never take a
+    # neighbour slot from a source, note or topic.
+    rel = [r for r in _related(db, None, words, set(), args.limit * 2,
+                               semantic=args.semantic)
+           if r[2][2] != "glossary"][:args.limit]
     if rel:
         for _, sc, m in rel:
             print(fmt(m, sc))
@@ -890,6 +896,24 @@ def cmd_orient(args):
             print(f"  topics/{m[0]}.md — {m[1]}")
     else:
         print("  none scored; run `scholia search <theme> --kind topics`")
+
+    if (VAULT / "glossary").is_dir():
+        print("\n== glossary terms (map to these before creating new ones) ==")
+        terms = []
+        plain = re.sub(r"https?://\S+", " ", target)  # URL parts are not terms
+        if fts_query(plain, "AND"):
+            terms, _ = _search(db, plain, args.limit, " AND n.kind=?",
+                               ("glossary",))
+        if terms:
+            for t in terms:
+                summary = db.execute("SELECT tldr FROM notes WHERE slug=? "
+                                     "AND kind='glossary'", (t[0],)).fetchone()
+                print(f"  glossary/{t[0]}.md — {t[1]}")
+                if summary and summary[0]:
+                    print(f"      {summary[0][:160]}")
+        else:
+            print("  none matched; search again by term once you know them: "
+                  "`scholia search <term> --kind glossary`")
     return 0
 
 
@@ -1344,7 +1368,8 @@ def cmd_doctor(args):
     print("\n== thin metadata ==")
     thin = db.execute(
         "SELECT n.slug, (SELECT COUNT(*) FROM tags WHERE note_id=n.id) c "
-        "FROM notes n WHERE c <= 1 ORDER BY c, n.slug").fetchall()
+        "FROM notes n WHERE c <= 1 AND n.kind != 'glossary' "
+        "ORDER BY c, n.slug").fetchall()
     inbox = db.execute(
         "SELECT slug FROM notes WHERE status='inbox' ORDER BY slug").fetchall()
     print(f"  {len(thin)} note(s) with <=1 tag")
@@ -1552,7 +1577,7 @@ def main():
     s.add_argument("query", nargs="+")
     s.add_argument("--limit", type=int, default=10)
     s.add_argument("--realm", help="knowledge | personal | work")
-    s.add_argument("--kind", help="sources | notes | topics")
+    s.add_argument("--kind", help="sources | notes | topics | glossary")
     s.add_argument("--type", help="source_type, e.g. repo, pdf, article")
     s.add_argument("--status")
     s.add_argument("--tag")
@@ -1602,7 +1627,7 @@ def main():
     m.add_argument("query", nargs="+")
     m.add_argument("--limit", type=int, default=10)
     m.add_argument("--realm", help="knowledge | personal | work")
-    m.add_argument("--kind", help="sources | notes | topics")
+    m.add_argument("--kind", help="sources | notes | topics | glossary")
     m.add_argument("--type", help="source_type, e.g. repo, pdf, article")
     m.add_argument("--tag")
     m.add_argument("--since", help="YYYY-MM-DD, on published/captured")
