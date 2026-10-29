@@ -1550,7 +1550,8 @@ def cmd_stats(args):
         rows = db.execute(sql).fetchall()
         print(f"  {label}: " + "  ".join(f"{a}({b})" for a, b in rows))
     lk = db.execute(
-        "SELECT COUNT(*), SUM(resolved=1), SUM(resolved=2), SUM(resolved=0) "
+        "SELECT COUNT(*), COALESCE(SUM(resolved=1),0), "
+        "COALESCE(SUM(resolved=2),0), COALESCE(SUM(resolved=0),0) "
         "FROM links").fetchone()
     print(f"  links: {lk[0]} total · {lk[1]} in-vault · {lk[2]} to memory · "
           f"{lk[3]} unresolved")
