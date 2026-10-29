@@ -369,7 +369,11 @@ def stamp():
             continue
         for e in entries:
             if e.name.endswith(".md"):
-                st = e.stat()
+                try:
+                    st = e.stat()
+                except OSError:  # a dangling symlink: build skips it too
+                    parts.append((kind, e.name, "unreadable"))
+                    continue
                 # ctime cannot be set back by utime or `cp -p`, so an edit that
                 # keeps the size and restores the old mtime still changes the stamp.
                 parts.append((kind, e.name, st.st_mtime_ns, st.st_size,
@@ -416,9 +420,14 @@ def _build_into(path, verbose):
 
     parsed = []
     for kind, path in files:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:  # dangling symlink, no permission, a directory
+            print(f"scholia: skipped {path.relative_to(VAULT)}: "
+                  f"{e.strerror or e}", file=sys.stderr)
+            continue
         parsed.append((kind, path, *parse_frontmatter(text)))
-    slugs = {p.stem for _, p in files}
+    slugs = {p.stem for _, p, *_ in parsed}
     anchors = {path.stem: anchors_of(body)
                for _, path, _, _, body in parsed}
     mem = memory_slugs()
