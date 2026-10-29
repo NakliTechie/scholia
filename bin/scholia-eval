@@ -202,7 +202,7 @@ def run_pool(v, db, queries):
 
 
 def main():
-    p = argparse.ArgumentParser(prog="vaulteval.py")
+    p = argparse.ArgumentParser(prog="scholia-eval")
     p.add_argument("--vault", help="vault directory (default: as scholia)")
     p.add_argument("--impl", default=str(HOME / "bin/scholia"))
     p.add_argument("--queries",
