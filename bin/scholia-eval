@@ -47,12 +47,23 @@ def load_impl(path, vault=None):
 
 
 def load_queries(path):
+    """Read question<TAB>slugs lines; exit 2 with the line at fault if any
+    is malformed, so a typo in the labels never ends in a traceback."""
+    path = Path(path)
+    if not path.is_file():
+        print(f"no labelled questions: {path} not found "
+              "(one question<TAB>slugs line per question)", file=sys.stderr)
+        sys.exit(2)
     out = []
-    for line in Path(path).read_text().splitlines():
+    for i, line in enumerate(path.read_text().splitlines(), 1):
         if not line.strip() or line.startswith("#"):
             continue
-        q, gold = line.split("\t")
-        out.append((q, set(gold.split())))
+        parts = line.split("\t")
+        if len(parts) != 2 or not parts[0].strip() or not parts[1].split():
+            print(f"{path}:{i}: expected question<TAB>space-separated "
+                  f"slugs, got: {line[:80]!r}", file=sys.stderr)
+            sys.exit(2)
+        out.append((parts[0], set(parts[1].split())))
     return out
 
 
@@ -165,6 +176,9 @@ def run_related(v, db):
         slots += len(full)
     print(f"\nrelated over {len(notes)} notes/ files "
           f"({len(hubs)} hub nodes with degree > {HUB_DEGREE}):")
+    if not n_scored or not slots:
+        print("  nothing to score: no notes/ file has an in-vault link yet")
+        return None, None
     print(f"  link recall@{REL_K}, text + tags only: {rec_sum / n_scored:.3f}"
           f"  ({n_scored} notes with links)")
     print(f"  hub share of top-{REL_K} slots, full score: "
@@ -204,7 +218,13 @@ def main():
         return 2
     v = load_impl(args.impl, vault)
     db = v.connect()
-    queries = load_queries(args.queries or vault / "eval/queries.tsv")
+    qpath = args.queries or vault / "eval/queries.tsv"
+    queries = load_queries(qpath)
+    if not queries:
+        print(f"no labelled questions in {qpath}: add one line per question, "
+              "question<TAB>space-separated slugs of the notes that answer "
+              "it, then rerun", file=sys.stderr)
+        return 2
     print(f"impl: {args.impl}")
     if args.pool:
         run_pool(v, db, queries)
