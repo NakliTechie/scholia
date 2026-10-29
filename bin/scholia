@@ -329,6 +329,9 @@ def build(verbose=True):
     except (OSError, sqlite3.OperationalError) as e:
         # A read-only vault, or a directory where the index goes: say which
         # path and what to do, not a traceback. The markdown is untouched.
+        # An OSError on any other path (a note) is not about the index.
+        if isinstance(e, OSError) and e.filename not in (str(tmp), str(DB_PATH)):
+            raise
         print(f"cannot write the index {DB_PATH}: "
               f"{getattr(e, 'strerror', None) or e}. It is a rebuildable "
               "cache: make the vault folder writable, or move aside whatever "
