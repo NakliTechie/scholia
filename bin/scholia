@@ -326,8 +326,19 @@ def build(verbose=True):
         db = _build_into(tmp, verbose)
         db.close()
         os.replace(tmp, DB_PATH)
+    except (OSError, sqlite3.OperationalError) as e:
+        # A read-only vault, or a directory where the index goes: say which
+        # path and what to do, not a traceback. The markdown is untouched.
+        print(f"cannot write the index {DB_PATH}: "
+              f"{getattr(e, 'strerror', None) or e}. It is a rebuildable "
+              "cache: make the vault folder writable, or move aside whatever "
+              "is at that path, then rerun", file=sys.stderr)
+        sys.exit(2)
     finally:
-        tmp.unlink(missing_ok=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
     return sqlite3.connect(DB_PATH)
 
 
