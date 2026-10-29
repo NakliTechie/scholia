@@ -1,0 +1,7 @@
+.DS_Store
+.obsidian/
+.trash/
+# scholia caches -- rebuilt from the markdown on demand, never authoritative
+.scholia.db
+.scholia.db.*.tmp
+.scholia.emb.db

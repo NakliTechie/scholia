@@ -1,0 +1,1 @@
+- 2026-09-08 14:32 — quokka parser feels slow on big files
