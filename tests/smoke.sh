@@ -7,7 +7,8 @@ S="$here/bin/scholia"
 v=$(mktemp -d)
 p=$(mktemp -d)  # a projects root beside the vault
 h=$(mktemp -d)  # a repo with an ntkit plan/ folder, for `history`
-trap 'rm -rf "$v" "$p" "$h"' EXIT
+sk=; pn=  # made later; one trap removes every temp dir (a second trap would replace it)
+trap 'rm -rf "$v" "$p" "$h" ${sk:+"$sk"} ${pn:+"$pn"}' EXIT
 cp -R "$here/template/." "$v/"
 pass=0
 fail=0
@@ -177,7 +178,6 @@ fi
 
 # Skip-rebuild: an unchanged vault keeps its index; any change is seen.
 sk=$(mktemp -d)
-trap 'rm -rf "$v" "$p" "$h" "$sk"' EXIT
 cp -R "$here/template/." "$sk/"
 printf -- '---\ntitle: "Skip test"\ntags: [skip]\n---\n## TL;DR\nalpha1 marker word\n' > "$sk/sources/2026-01-01-skip-test.md"
 find "$sk" -name '*.md' -exec touch -t 202001010000 {} +   # old mtime; touch itself sets ctime to now
@@ -216,7 +216,6 @@ check "a deleted file is gone" "no matches" "$S" --vault "$sk" search gamma3
 
 # panel-nt runner: groups, timeout, retry, probe (fake providers; offline).
 pn=$(mktemp -d)
-trap 'rm -rf "$v" "$p" "$h" "$pn"' EXIT
 P="$here/skills/panel-nt/scripts/panel.py"
 echo "a prompt" > "$pn/prompt.md"
 cat > "$pn/panel.toml" <<TOML
