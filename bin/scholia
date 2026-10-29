@@ -1569,6 +1569,17 @@ def cmd_stats(args):
     return 0
 
 
+def positive_int(text):
+    """argparse type: a whole number of at least 1."""
+    try:
+        n = int(text)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be a whole number >= 1, got {text!r}")
+    return n
+
+
 def main():
     p = argparse.ArgumentParser(
         prog="scholia",
@@ -1652,7 +1663,7 @@ def main():
         func=cmd_stats)
 
     lc = sub.add_parser("linkcheck", help="resolve every url: (network)")
-    lc.add_argument("--workers", type=int, default=16)
+    lc.add_argument("--workers", type=positive_int, default=16)
     lc.add_argument("--all", action="store_true",
                     help="also list bot-blocked urls")
     lc.set_defaults(func=cmd_linkcheck)
