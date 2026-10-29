@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- **A read-only vault is searchable.** When `.scholia.db` cannot be written (a read-only vault, or a directory at that path), every read command builds the index in memory for that run and prints one stderr line naming the path; before, it exited 2. The cost is a full build on every run, because nothing is cached. `scholia build` still exits 2 there, since its job is to write the index. 3 new smoke checks (62 total); the walkthrough harness covers both cases and the `build` refusal (66 steps).
+
 - **orient and the index know the glossary.** `glossary/` is indexed beside sources, notes and topics: a term's `aliases` are searchable with its title, its `summary` stands in for a TL;DR, and links from topic MOCs to terms now resolve (on the author's vault, `doctor` flags fell 288 → 286). `orient` prints a last block, `== glossary terms ==`, with matching terms and their summaries, so `/capture-nt` Step 7b maps to an existing term before writing a new one; terms never take a slot in the neighbour list. `search --kind glossary` finds terms. `doctor` does not count an untagged term as thin metadata. 3 new smoke checks (59 total).
 
 - **/capture-nt:** new Step 7b maps each capture's key terms (usually 1–5) to the vault glossary: an existing term, found by title or alias, gains the new source on its `Source:` line; a missing one gets a plain-English `glossary/<term>.md` listed under the topic MOC's `## Glossary`. Skipped when the vault has no `glossary/` folder and for `personal` or `work` captures. Step 9 commits `glossary/` files; the confirm echo gains a `glossary:` line. The template vault gains a `glossary/` folder and the glossary-term frontmatter.

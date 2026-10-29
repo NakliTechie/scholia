@@ -317,23 +317,30 @@ CREATE INDEX idx_urls_norm ON urls(url_norm);
 """
 
 
-def build(verbose=True):
+def build(verbose=True, fallback=False):
     """Build into a private temp file, then rename it over .scholia.db. A
     concurrent run keeps reading the file it opened; nobody sees a half-built
-    index or has its tables dropped mid-query."""
+    index or has its tables dropped mid-query. With `fallback`, an index that
+    cannot be written (a read-only vault) is built in memory for this run."""
     tmp = DB_PATH.with_name(f"{DB_PATH.name}.{os.getpid()}.tmp")
     try:
         db = _build_into(tmp, verbose)
         db.close()
         os.replace(tmp, DB_PATH)
     except (OSError, sqlite3.OperationalError) as e:
-        # A read-only vault, or a directory where the index goes: say which
-        # path and what to do, not a traceback. The markdown is untouched.
-        # An OSError on any other path (a note) is not about the index.
+        # A read-only vault, or a directory where the index goes. The markdown
+        # is untouched. An OSError on any other path (a note) is not about the
+        # index.
         if isinstance(e, OSError) and e.filename not in (str(tmp), str(DB_PATH)):
             raise
-        print(f"cannot write the index {DB_PATH}: "
-              f"{getattr(e, 'strerror', None) or e}. It is a rebuildable "
+        why = getattr(e, "strerror", None) or e
+        if fallback:
+            # The index is only a cache: search still works, it just costs a
+            # full build on every run.
+            print(f"scholia: cannot write the index {DB_PATH} ({why}); "
+                  "using an in-memory index for this run", file=sys.stderr)
+            return _build_into(None, False)
+        print(f"cannot write the index {DB_PATH}: {why}. It is a rebuildable "
               "cache: make the vault folder writable, or move aside whatever "
               "is at that path, then rerun", file=sys.stderr)
         sys.exit(2)
@@ -405,8 +412,11 @@ def _build_into(path, verbose):
     # never be hidden by a build that read the file later.
     built_ns = time.time_ns()
     digest, newest = stamp()
-    path.unlink(missing_ok=True)
-    db = sqlite3.connect(path)
+    if path is None:  # in memory: nothing on disk to replace
+        db = sqlite3.connect(":memory:")
+    else:
+        path.unlink(missing_ok=True)
+        db = sqlite3.connect(path)
     db.executescript(SCHEMA)
     db.executemany("INSERT INTO meta VALUES (?,?)", [
         ("stamp", digest),
@@ -503,7 +513,7 @@ def _build_into(path, verbose):
 def connect(rebuild=True):
     """Rebuild unless a stat of every input shows the index is current."""
     if rebuild and not fresh() or not DB_PATH.exists():
-        return build(verbose=False)
+        return build(verbose=False, fallback=True)
     return sqlite3.connect(DB_PATH)
 
 

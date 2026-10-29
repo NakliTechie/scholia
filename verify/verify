@@ -73,7 +73,7 @@ PLAN = "mkdir -p repo && cp -R \"$SEED/plan-history\" repo/plan"
 SPEC = {
     "first-run": ("anonymous visitor and brand-new user", [
         step("ran stats with no vault anywhere", "scholia stats", "nonzero", [NV]),
-        step("mistyped a subcommand", "scholia serch x", "nonzero", ["maybe you meant 'search'"]),
+        step("mistyped a subcommand", "scholia serch x", "nonzero", ["invalid choice: 'serch'"]),  # the 'maybe you meant' hint is Python 3.14+ only
         step("M3: pointed SCHOLIA_VAULT at the home folder", "SCHOLIA_VAULT=$HOME scholia search x; e=$?; [ -e $HOME/.scholia.db ] && echo INDEX-IN-HOME; exit $e",
              "nonzero", ["not a vault:"], ["INDEX-IN-HOME"]),
         step("made a vault from the template", TEMPLATE + " && ls v", 0, ["sources", "notes"]),
@@ -144,8 +144,9 @@ SPEC = {
         step("M4: broken scholia.toml names the file", "cp v/scholia.toml ok.toml && printf 'x = [\\n' > v/scholia.toml && cd v && scholia stats", 2, ["scholia.toml: not valid TOML"]),
         step("M4: wrong-type project_dirs is rejected", "printf 'project_dirs = \"../p\"\\n' > v/scholia.toml && cd v && scholia stats", 2, ["project_dirs must be a list"]),
         step("restored the config", "cp ok.toml v/scholia.toml && cd v && scholia stats", 0, ["sources     3 notes"]),
-        step("M5: a directory where the index goes", "rm -f v/.scholia.db && mkdir v/.scholia.db && cd v && scholia search licence", 2, ["cannot write the index", "Is a directory"]),
-        step("M5: a read-only vault", "rm -rf v/.scholia.db && chmod a-w v && cd v && scholia search licence; e=$?; chmod u+w .; exit $e", 2, ["cannot write the index"]),
+        step("M5/M7: a directory where the index goes: search uses an in-memory index", "rm -f v/.scholia.db && mkdir v/.scholia.db && cd v && scholia search licence", 0, ["using an in-memory index", "Is a directory", "4 hit(s)"]),
+        step("M5/M7: a read-only vault: search uses an in-memory index", "rm -rf v/.scholia.db && chmod a-w v && cd v && scholia search licence; e=$?; chmod u+w .; exit $e", 0, ["using an in-memory index", "4 hit(s)"]),
+        step("M5: `scholia build` in a read-only vault still refuses", "chmod a-w v && cd v && scholia build; e=$?; chmod u+w .; exit $e", 2, ["cannot write the index", "make the vault folder writable"], ["in-memory"]),
         step("M6: a dangling symlink note is skipped", "ln -sf /nonexistent/x.md v/notes/dangling.md && cd v && scholia search licence", 0, ["skipped notes/dangling.md", "4 hit(s)"], ["cannot write the index"]),
         step("M6: an unreadable note is skipped", "rm v/notes/dangling.md && printf -- '---\\ntitle: l\\n---\\nzz\\n' > v/notes/locked.md && chmod 000 v/notes/locked.md && cd v && scholia search licence; e=$?; chmod 644 notes/locked.md; exit $e", 0, ["skipped notes/locked.md: Permission denied"]),
     ]),

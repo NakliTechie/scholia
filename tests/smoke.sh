@@ -60,6 +60,12 @@ check "stats counts passage links"   "2 [[note#anchor]] · 1 resolve" "$S" --vau
 check "search: American spelling finds British text" "example-paper" "$S" --vault "$v" search license
 check "search via SCHOLIA_VAULT"     "example-paper" env SCHOLIA_VAULT="$v" "$S" search copyleft
 check "search from inside the vault" "example-paper" sh -c "cd '$v/notes' && '$S' search copyleft"
+# a read-only vault: search falls back to an in-memory index; `build` still refuses
+rm -f "$v/.scholia.db"; chmod a-w "$v"
+check "read-only vault: search works"            "example-paper"           "$S" --vault "$v" search copyleft
+check "read-only vault: one stderr note"         "using an in-memory index" "$S" --vault "$v" search copyleft
+check "read-only vault: build refuses"           "make the vault folder writable" "$S" --vault "$v" build
+chmod u+w "$v"
 check "related finds the linked note" "licensing-notes" "$S" --vault "$v" related 2026-01-01-example-paper
 check "orient reports a known url"   "ALREADY CAPTURED" "$S" --vault "$v" orient https://example.com/paper
 check "orient finds a url among extra words" "ALREADY CAPTURED" "$S" --vault "$v" orient https://example.com/paper Example Paper licensing
