@@ -1646,7 +1646,7 @@ def main():
 
     s = sub.add_parser("search", help="ranked full-text search with filters")
     s.add_argument("query", nargs="+")
-    s.add_argument("--limit", type=int, default=10)
+    s.add_argument("--limit", type=positive_int, default=10)
     s.add_argument("--realm", help="knowledge | personal | work")
     s.add_argument("--kind", help="sources | notes | topics | glossary")
     s.add_argument("--type", help="source_type, e.g. repo, pdf, article")
@@ -1658,14 +1658,14 @@ def main():
 
     r = sub.add_parser("related", help="notes near a slug or free text")
     r.add_argument("target", nargs="+")
-    r.add_argument("--limit", type=int, default=8)
+    r.add_argument("--limit", type=positive_int, default=8)
     r.add_argument("--semantic", action="store_true",
                    help="also blend in embedding similarity (needs fastembed)")
     r.set_defaults(func=cmd_related)
 
     o = sub.add_parser("orient", help="capture pre-flight: dupe check + neighbours")
     o.add_argument("target", nargs="+")
-    o.add_argument("--limit", type=int, default=8)
+    o.add_argument("--limit", type=positive_int, default=8)
     o.add_argument("--semantic", action="store_true",
                    help="also blend in embedding similarity (needs fastembed)")
     o.set_defaults(func=cmd_orient)
@@ -1673,7 +1673,7 @@ def main():
     pr = sub.add_parser("projects", help="after a capture: which projects "
                         "outside the vault share its terms")
     pr.add_argument("target", nargs="+", help="a note slug or free text")
-    pr.add_argument("--limit", type=int, default=5)
+    pr.add_argument("--limit", type=positive_int, default=5)
     pr.add_argument("--dir", action="append",
                     help="projects root (repeatable); default: project_dirs "
                          "in <vault>/scholia.toml")
@@ -1689,7 +1689,7 @@ def main():
                     help="entries dated on or after this day")
     hi.add_argument("--until", type=iso_date, metavar="YYYY-MM-DD",
                     help="entries dated on or before this day")
-    hi.add_argument("--limit", type=int, default=10)
+    hi.add_argument("--limit", type=positive_int, default=10)
     hi.add_argument("--chrono", action="store_true",
                     help="newest first instead of by relevance")
     hi.set_defaults(func=cmd_history, needs_vault=False)
@@ -1697,7 +1697,7 @@ def main():
     m = sub.add_parser("semantic", help="nearest notes by meaning "
                        "(optional; needs fastembed)")
     m.add_argument("query", nargs="+")
-    m.add_argument("--limit", type=int, default=10)
+    m.add_argument("--limit", type=positive_int, default=10)
     m.add_argument("--realm", help="knowledge | personal | work")
     m.add_argument("--kind", help="sources | notes | topics | glossary")
     m.add_argument("--type", help="source_type, e.g. repo, pdf, article")
@@ -1707,7 +1707,7 @@ def main():
     m.set_defaults(func=cmd_semantic)
 
     d = sub.add_parser("doctor", help="hygiene worklist")
-    d.add_argument("--limit", type=int, default=20)
+    d.add_argument("--limit", type=positive_int, default=20)
     d.add_argument("--min-inbound", type=int, default=2,
                    help="dangling targets with at least this many inbound "
                         "links are worth creating (default 2)")
@@ -1725,8 +1725,8 @@ def main():
     e = sub.add_parser("entity", help="generated entity page: every passage "
                        "naming a lab / model / person")
     e.add_argument("name", nargs="+")
-    e.add_argument("--limit", type=int, default=15)
-    e.add_argument("--passages", type=int, default=3,
+    e.add_argument("--limit", type=positive_int, default=15)
+    e.add_argument("--passages", type=positive_int, default=3,
                    help="key-claim passages shown per note (default 3)")
     e.set_defaults(func=cmd_entity)
 
