@@ -216,6 +216,11 @@ def main():
         print("no vault found: pass --vault DIR or set SCHOLIA_VAULT",
               file=sys.stderr)
         return 2
+    if not core.is_vault(vault):
+        print(f"not a vault: {vault} has none of "
+              f"{', '.join(k + '/' for k in core.CONTENT_DIRS)}",
+              file=sys.stderr)
+        return 2
     v = load_impl(args.impl, vault)
     db = v.connect()
     qpath = args.queries or vault / "eval/queries.tsv"

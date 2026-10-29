@@ -106,6 +106,13 @@ def find_vault(explicit=None):
     return None
 
 
+def is_vault(path):
+    """A vault holds at least one content folder. An explicit --vault or
+    $SCHOLIA_VAULT that holds none is a typo, and indexing it would write
+    .scholia.db into an unrelated directory (a home folder, a repo)."""
+    return path.is_dir() and any((path / k).is_dir() for k in CONTENT_DIRS)
+
+
 def set_vault(path):
     """Point every module-level path at one vault and read its config."""
     global VAULT, DB_PATH, EMB_PATH, MEMORY_DIRS, PROJECT_DIRS
@@ -1672,6 +1679,12 @@ def main():
         if vault is None or not vault.is_dir():
             print("no vault found: pass --vault DIR, set SCHOLIA_VAULT, or run "
                   "inside a directory holding sources/ and notes/",
+                  file=sys.stderr)
+            return 2
+        if not is_vault(vault):
+            print(f"not a vault: {vault} has none of "
+                  f"{', '.join(k + '/' for k in CONTENT_DIRS)}; check --vault "
+                  "or SCHOLIA_VAULT, or start one from scholia's template/",
                   file=sys.stderr)
             return 2
         set_vault(vault)
