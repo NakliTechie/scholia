@@ -55,10 +55,15 @@ End a load-bearing bullet in a source note with a block ID: `- MIT is the most c
 
 Keyword search misses a note that says the same thing in other words. The optional semantic layer embeds each note's title, TL;DR and key claims with the frozen `all-MiniLM-L6-v2` encoder (about 90 MB, downloaded once to `~/.cache/scholia/models`). It needs `fastembed`, pinned in `requirements-semantic.txt`. Without it, `semantic` prints an install hint and every other command runs unchanged.
 
+Install it in scholia's own virtual environment, so its pins never change the Python you use for other tools. `scholia` finds that environment (`~/.local/share/scholia/venv`, or `$SCHOLIA_VENV`) and runs semantic commands under it:
+
 ```bash
-uv run --no-project --with-requirements ~/Code/scholia/requirements-semantic.txt \
-  ~/Code/scholia/bin/scholia semantic copying a big model into a tiny one
+python3 -m venv ~/.local/share/scholia/venv
+~/.local/share/scholia/venv/bin/pip install -r ~/Code/scholia/requirements-semantic.txt
+scholia semantic copying a big model into a tiny one
 ```
+
+Or run it once through `uv` with no install: `uv run --no-project --with-requirements ~/Code/scholia/requirements-semantic.txt ~/Code/scholia/bin/scholia semantic <text>`.
 
 ## Find when and why, from a project's plan
 

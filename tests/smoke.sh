@@ -67,7 +67,8 @@ check "read-only vault: one stderr note"         "using an in-memory index" "$S"
 check "read-only vault: build refuses"           "make the vault folder writable" "$S" --vault "$v" build
 chmod u+w "$v"
 # the same for `semantic`, only when fastembed and its model are already here (no download)
-if python3 -c "import fastembed" 2>/dev/null && [ -d "$HOME/.cache/scholia/models" ]; then
+venv=${SCHOLIA_VENV:-$HOME/.local/share/scholia/venv}
+if { python3 -c "import fastembed" 2>/dev/null || [ -x "$venv/bin/python3" ]; } && [ -d "$HOME/.cache/scholia/models" ]; then
   rm -f "$v/.scholia.db" "$v/.scholia.emb.db"; chmod a-w "$v"
   check "read-only vault: semantic works"        "example-paper"           "$S" --vault "$v" semantic copyleft
   check "read-only vault: semantic stderr note"  "in-memory copy"          "$S" --vault "$v" semantic copyleft
@@ -116,7 +117,13 @@ check "doctor flags the broken anchor" "#^no-such-claim" "$S" --vault "$v" docto
 check "backlinks show the cited anchor" "cites: #^mit-most-common" "$S" --vault "$v" backlinks 2026-01-01-example-paper
 check "entity lists the naming passage" "MIT is the most common" "$S" --vault "$v" entity MIT
 check "tags lists counts"            "2  licensing" "$S" --vault "$v" tags
-check "semantic without fastembed -> install hint" "needs fastembed" python3 -S "$S" --vault "$v" semantic licence
+check "semantic without fastembed -> install hint" "needs fastembed" env SCHOLIA_VENV="$v/no-venv" python3 -S "$S" --vault "$v" semantic licence
+check "install hint names scholia's own venv"       "no-venv/bin/pip install" env SCHOLIA_VENV="$v/no-venv" python3 -S "$S" --vault "$v" semantic licence
+if [ -x "$venv/bin/python3" ] && [ -d "$HOME/.cache/scholia/models" ]; then
+  check "semantic re-runs under scholia's venv"     "nearest by meaning" python3 -S "$S" --vault "$v" semantic licence
+else
+  echo "skip venv re-run check (no venv at $venv, or no model)"
+fi
 
 # projects: two projects; only licence-tool shares the note's terms, and its
 # pending list already cites the note's url. Its history log is a record, not
