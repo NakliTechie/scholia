@@ -1072,9 +1072,14 @@ def cmd_projects(args):
 # --------------------------------------------------------------------------
 
 def iso_date(text):
-    """argparse type for --since/--until: a YYYY-MM-DD string."""
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {text!r}")
+    """argparse type for --since/--until: a real YYYY-MM-DD date."""
+    from datetime import date
+    try:
+        ok = re.fullmatch(r"\d{4}-\d{2}-\d{2}", text) and date.fromisoformat(text)
+    except ValueError:
+        ok = False
+    if not ok:
+        raise argparse.ArgumentTypeError(f"expected a YYYY-MM-DD date, got {text!r}")
     return text
 
 
@@ -1647,7 +1652,8 @@ def main():
     s.add_argument("--type", help="source_type, e.g. repo, pdf, article")
     s.add_argument("--status")
     s.add_argument("--tag")
-    s.add_argument("--since", help="YYYY-MM-DD, on published/captured")
+    s.add_argument("--since", type=iso_date, metavar="YYYY-MM-DD",
+                   help="on published/captured")
     s.set_defaults(func=cmd_search)
 
     r = sub.add_parser("related", help="notes near a slug or free text")
@@ -1696,7 +1702,8 @@ def main():
     m.add_argument("--kind", help="sources | notes | topics | glossary")
     m.add_argument("--type", help="source_type, e.g. repo, pdf, article")
     m.add_argument("--tag")
-    m.add_argument("--since", help="YYYY-MM-DD, on published/captured")
+    m.add_argument("--since", type=iso_date, metavar="YYYY-MM-DD",
+                   help="on published/captured")
     m.set_defaults(func=cmd_semantic)
 
     d = sub.add_parser("doctor", help="hygiene worklist")
