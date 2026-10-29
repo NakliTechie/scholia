@@ -2,3 +2,6 @@
 # Promo output (regenerable; /windup-nt sweeps it)
 /marketing
 /brag-output*
+
+# verify/ evidence from harness runs
+/verify/.evidence/

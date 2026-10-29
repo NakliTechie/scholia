@@ -1,0 +1,522 @@
+#!/usr/bin/env python3
+"""verify — drive scholia's CLI the way a user does, one feature at a time.
+
+    verify/verify doctor              preflight: is this checkout ready to drive?
+    verify/verify verify <feature>    drive one feature area (see verify/features/)
+    verify/verify verify              the full sweep; exit 1 if any step fails
+    verify/verify list                the feature areas, in sweep order
+
+Each feature runs in its own tmux session on a private tmux socket, with its
+own HOME, TMPDIR and data directory under one run directory, seeded from
+demo/seed/. Nothing reads or writes your real vault or config: SCHOLIA_VAULT
+is unset, HOME points at the run, and fastembed is blocked so no model is ever
+downloaded. linkcheck is driven against a local HTTP stub on 127.0.0.1.
+
+Every step is checked against the terminal floor invariants:
+  INV-CRASH   no traceback on stderr
+  INV-EXIT    a valid command exits 0; an invalid one exits non-zero and says why
+  INV-HANG    every command finishes within --timeout seconds
+  INV-SILENT  a command prints something (a lead, never a failure)
+  INV-DURABLE persisted state reads back from a fresh session (explicit steps)
+  INV-STRAY   nothing is written in the checkout or ~/.cache/scholia
+plus the step's own expected output. Any breach but INV-SILENT fails the run.
+
+Evidence (per-step stdout, stderr, exit code, the tmux transcript, and
+summary.json) goes to --evidence DIR, default verify/.evidence/<UTC stamp>/;
+teardown never deletes it. The last line printed is one machine-readable
+summary: `VERIFY {"result": "pass"|"fail", ...}`.
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CO = HERE.parent                       # the checkout this harness belongs to
+BIN = CO / "bin"
+SEED = CO / "demo" / "seed"
+FEATURES = HERE / "features"
+REAL_CACHE = Path.home() / ".cache" / "scholia"
+CRASH = re.compile(r"Traceback \(most recent call last\)|^\w+(Error|Exception):", re.M)
+
+
+# --------------------------------------------------------------------------
+# features: each is a list of steps. A step is a dict:
+#   cmd     shell command, run in the drive's work dir (seed copied there)
+#   rc      expected exit: 0, "nonzero", or an int
+#   want    substrings that must appear in stdout+stderr
+#   deny    substrings that must not appear
+#   say     what the user does, as prose (goes to the action log)
+#   fresh   True: run in a second, fresh tmux session (INV-DURABLE)
+# {S} in a cmd is the stub server's base URL (linkcheck only).
+# --------------------------------------------------------------------------
+
+def step(say, cmd, rc=0, want=(), deny=(), fresh=False):
+    return {"say": say, "cmd": cmd, "rc": rc, "want": list(want),
+            "deny": list(deny), "fresh": fresh}
+
+
+NV = "no vault found"
+SEED_VAULT = "cp -R \"$SEED/vault\" v"
+TEMPLATE = "mkdir v && git -C \"$CO\" archive HEAD template | tar -x -C v --strip-components=1"
+PLAN = "mkdir -p repo && cp -R \"$SEED/plan-history\" repo/plan"
+
+SPEC = {
+    "first-run": ("anonymous visitor and brand-new user", [
+        step("ran stats with no vault anywhere", "scholia stats", "nonzero", [NV]),
+        step("mistyped a subcommand", "scholia serch x", "nonzero", ["maybe you meant 'search'"]),
+        step("M3: pointed SCHOLIA_VAULT at the home folder", "SCHOLIA_VAULT=$HOME scholia search x; e=$?; [ -e $HOME/.scholia.db ] && echo INDEX-IN-HOME; exit $e",
+             "nonzero", ["not a vault:"], ["INDEX-IN-HOME"]),
+        step("made a vault from the template", TEMPLATE + " && ls v", 0, ["sources", "notes"]),
+        step("M1: ran stats in the empty vault", "cd v && scholia stats", 0, ["0 in-vault · 0 to memory · 0 unresolved"], ["None"]),
+        step("searched the empty vault", "cd v && scholia search licence", 0, ["no matches for: licence"]),
+        step("M2: ran scholia-eval on the template's empty labels", "cd v && scholia-eval", 2, ["no labelled questions in"]),
+        step("ran doctor on the empty vault", "cd v && scholia doctor", 0, ["0 item(s) flagged"]),
+    ]),
+    "search": ("full-text search and its filters", [
+        step("copied the demo seed vault", SEED_VAULT),
+        step("searched American spelling for British text", "cd v && scholia search license", 0, ["2026-01-01-example-paper"]),
+        step("searched with --kind and --tag", "cd v && scholia search copyleft --kind sources --tag licensing", 0, ["2 hit(s)"]),
+        step("searched with --since", "cd v && scholia search licence --since 2026-02-01", 0, ["1 hit(s)", "gpl-history"]),
+        step("searched a glossary alias", "cd v && scholia search teacher-student --kind glossary", 0, ["knowledge-distillation"]),
+        step("searched with one unknown term", "cd v && scholia search distillation zebra", 0, ["any term (no result matched all)"]),
+        step("L3: searched with an impossible --since", "cd v && scholia search licence --since 2026-13-45", 2, ["expected a YYYY-MM-DD date"]),
+        step("L4: searched with --limit 0", "cd v && scholia search licence --limit 0", 2, ["must be a whole number >= 1"]),
+        step("searched only stopwords", "cd v && scholia search the and of", 1, ["no searchable terms"]),
+    ]),
+    "orient": ("capture pre-flight: duplicate check, neighbours, glossary", [
+        step("copied the demo seed vault", SEED_VAULT),
+        step("orient on a captured url with tracking params", "cd v && scholia orient 'https://blog.example.org/tiny-models?utm_source=x'", 0, ["ALREADY CAPTURED", "2026-02-10-tiny-models-post"]),
+        step("orient on an alt_urls entry", "cd v && scholia orient https://github.com/example/paper", 0, ["ALREADY CAPTURED"]),
+        step("orient on a new url with terms", "cd v && scholia orient https://new.example.com/x teacher-student", 0, ["new capture", "glossary/knowledge-distillation.md"]),
+        step("orient with no url", "cd v && scholia orient licence choices", 0, ["no URL given"]),
+    ]),
+    "graph": ("related, backlinks, entity, tags", [
+        step("copied the demo seed vault", SEED_VAULT),
+        step("related to a source slug", "cd v && scholia related 2026-02-10-tiny-models-post", 0, ["distillation-limits"]),
+        step("backlinks show the cited claims", "cd v && scholia backlinks 2026-01-01-example-paper", 0, ["cites: #^mit-most-common  #^copyleft-share"]),
+        step("backlinks of a missing slug", "cd v && scholia backlinks nothing-here", 1, ["no note with slug"]),
+        step("entity gathers a naming passage", "cd v && scholia entity Free Software Foundation", 0, ["published in 1989"]),
+        step("tags with counts, then one tag", "cd v && scholia tags && scholia tags licensing", 0, ["3  licensing", "3 note(s) tagged licensing"]),
+    ]),
+    "doctor": ("offline hygiene worklist", [
+        step("copied the demo seed vault", SEED_VAULT),
+        step("ran doctor on the seed", "cd v && scholia doctor", 0, ["1 genuinely unresolved target(s)", "still status: inbox"]),
+        step("added a broken anchor, doctor lists it", "printf -- '---\\ntitle: s\\n---\\n[[licensing-notes#^nope]]\\n' > v/notes/s.md && cd v && scholia doctor", 0, ["s: [[licensing-notes#^nope]]"]),
+    ]),
+    "projects": ("which projects a note bears on", [
+        step("copied the seed vault and projects", SEED_VAULT + " && cp -R \"$SEED/projects\" projects"),
+        step("projects with no config gives the hint", "cd v && scholia projects 2026-01-01-example-paper", 0, ["no project directories configured"]),
+        step("projects --dir ranks the citing project", "cd v && scholia projects 2026-01-01-example-paper --dir ../projects", 0, ["licence-tool", "(already cites this source)"]),
+    ]),
+    "history": ("dated search of a plan/ folder, no vault", [
+        step("copied the plan fixture", PLAN),
+        step("history by relevance", "scholia history marmot --plan repo", 0, ["_archive/2026-08-01-summary.md"]),
+        step("history newest first", "scholia history quokka --plan repo --chrono", 0, ["3 match(es)"]),
+        step("history with no plan folder", "scholia history marmot --plan nope", 2, ["no plan folder found"]),
+        step("L3: history with an impossible date", "scholia history quokka --plan repo --since 2026-13-45", 2, ["expected a YYYY-MM-DD date"]),
+        step("M4: history works inside a vault with a broken scholia.toml", SEED_VAULT + " && printf 'x = [\\n' > v/scholia.toml && cd v && scholia history quokka --plan ../repo", 0, ["3 match(es)"]),
+    ]),
+    "linkcheck": ("url resolution, against a local stub (no internet)", [
+        step("wrote a vault whose urls point at the stub",
+             "mkdir -p v/sources v/notes && for x in ok gone nohead forbidden boom; do printf -- \"---\\ntitle: $x\\nurl: {S}/$x\\n---\\n\" > v/sources/2026-01-01-$x.md; done; ls v/sources", 0, ["2026-01-01-ok.md"]),
+        step("ran linkcheck --all", "cd v && scholia linkcheck --all", 0, ["5 url(s): 2 ok · 1 dead · 1 blocked · 1 error", "[404] 2026-01-01-gone", "[403] 2026-01-01-forbidden"]),
+        step("L1: linkcheck --workers 0", "cd v && scholia linkcheck --workers 0", 2, ["must be a whole number >= 1"]),
+    ]),
+    "eval": ("retrieval scoring on labelled questions", [
+        step("copied the demo seed vault", SEED_VAULT),
+        step("ran scholia-eval on the seed labels", "cd v && scholia-eval", 0, ["queries (3, gold notes 5)", "link recall@8"]),
+        step("M2: eval on a label line with no tab", "printf 'no tab here\\n' > bad.tsv && cd v && scholia-eval --queries ../bad.tsv", 2, ["bad.tsv:1: expected question<TAB>"]),
+        step("M2: eval on a missing label file", "cd v && scholia-eval --queries ../none.tsv", 2, ["not found"]),
+    ]),
+    "index-faults": ("the index and config when the disk is not as expected", [
+        step("copied the demo seed vault", SEED_VAULT),
+        step("index overwritten with garbage is rebuilt", "printf garbage > v/.scholia.db && cd v && scholia search licence", 0, ["4 hit(s)"]),
+        step("M4: broken scholia.toml names the file", "cp v/scholia.toml ok.toml && printf 'x = [\\n' > v/scholia.toml && cd v && scholia stats", 2, ["scholia.toml: not valid TOML"]),
+        step("M4: wrong-type project_dirs is rejected", "printf 'project_dirs = \"../p\"\\n' > v/scholia.toml && cd v && scholia stats", 2, ["project_dirs must be a list"]),
+        step("restored the config", "cp ok.toml v/scholia.toml && cd v && scholia stats", 0, ["sources     3 notes"]),
+        step("M5: a directory where the index goes", "rm -f v/.scholia.db && mkdir v/.scholia.db && cd v && scholia search licence", 2, ["cannot write the index", "Is a directory"]),
+        step("M5: a read-only vault", "rm -rf v/.scholia.db && chmod a-w v && cd v && scholia search licence; e=$?; chmod u+w .; exit $e", 2, ["cannot write the index"]),
+        step("M6: a dangling symlink note is skipped", "ln -sf /nonexistent/x.md v/notes/dangling.md && cd v && scholia search licence", 0, ["skipped notes/dangling.md", "4 hit(s)"], ["cannot write the index"]),
+        step("M6: an unreadable note is skipped", "rm v/notes/dangling.md && printf -- '---\\ntitle: l\\n---\\nzz\\n' > v/notes/locked.md && chmod 000 v/notes/locked.md && cd v && scholia search licence; e=$?; chmod 644 notes/locked.md; exit $e", 0, ["skipped notes/locked.md: Permission denied"]),
+    ]),
+    "semantic": ("meaning search: UNREACHABLE here (needs fastembed and a ~90 MB model download); only the missing-fastembed path is driven", [
+        step("copied the demo seed vault", SEED_VAULT),
+        step("semantic without fastembed gives the install hint", "cd v && scholia semantic licence", 3, ["needs fastembed"]),
+        step("related --semantic falls back with a note", "cd v && scholia related licence --semantic", 0, ["--semantic ignored", "gpl-history"]),
+    ]),
+    "freshness": ("the index stays current; state reads back from a fresh session", [
+        # An index built within RACY_NS (2 s) of the newest file change is
+        # stored untrusted and rebuilt once more, so wait on that condition
+        # (newest ctime older than 2.5 s, 10 s cap) before building.
+        step("copied the demo seed vault, waited out the racy window, built",
+             SEED_VAULT + " && python3 -c \"import os,time,glob; t=time.time()+10\n"
+             "while time.time()<t and time.time()-max(os.stat(p).st_ctime for p in glob.glob('v/*/*.md'))<2.5: time.sleep(0.1)\" "
+             "&& cd v && scholia build && sqlite3 .scholia.db \"select 'trusted='||value from meta where key='trusted'\"",
+             0, ["built .scholia.db: 9 notes", "trusted=1"]),
+        step("INV-DURABLE: a fresh session reuses the index", "cd v && a=$(ls -i .scholia.db) && scholia stats >/dev/null && b=$(ls -i .scholia.db) && [ \"$a\" = \"$b\" ] && echo same-index",
+             0, ["same-index"], fresh=True),
+        step("an appended word is searchable at once", "cd v && printf 'zzfresh\\n' >> notes/licensing-notes.md && scholia search zzfresh", 0, ["licensing-notes"]),
+        step("INV-DURABLE: a fresh session sees the edit", "cd v && scholia search zzfresh", 0, ["licensing-notes"], fresh=True),
+        step("INV-FRESH: cached answer equals a forced rebuild's", "cd v && scholia search licence > ../a && scholia build >/dev/null && scholia search licence > ../b && cmp ../a ../b && echo equal", 0, ["equal"]),
+        step("a deleted word is gone", "cd v && sed -i.bak '/zzfresh/d' notes/licensing-notes.md && rm notes/licensing-notes.md.bak && scholia search zzfresh", 0, ["no matches"]),
+    ]),
+}
+
+
+# --------------------------------------------------------------------------
+# the step runner, executed inside the tmux session
+# --------------------------------------------------------------------------
+
+def tree(root, skip):
+    out = {}
+    for dp, dns, fns in os.walk(root):
+        dns[:] = [d for d in dns if os.path.join(dp, d) not in skip and d != ".git"]
+        for f in fns:
+            p = os.path.join(dp, f)
+            try:
+                st = os.lstat(p)
+                out[p] = (st.st_size, st.st_mtime_ns)
+            except OSError:
+                pass
+    return out
+
+
+def snapshot(skip):
+    s = tree(str(CO), skip)
+    s.update({"cache:" + k: v for k, v in tree(str(REAL_CACHE), set()).items()}
+             if REAL_CACHE.is_dir() else {})
+    return s
+
+
+def run_step(stepdir, n, timeout):
+    """Run step n inside the session; write out/err/rc/stray, then .done."""
+    d = Path(stepdir)
+    spec = json.loads((d / f"{n}.json").read_text())
+    skip = {str(CO / "plan"), spec["evidence"]}
+    print(f"$ {spec['cmd']}", flush=True)
+    before = snapshot(skip)
+    t = time.time()
+    try:
+        p = subprocess.run(["sh", "-c", spec["cmd"]], capture_output=True,
+                           text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        rc, out, err, hung = p.returncode, p.stdout, p.stderr, False
+    except subprocess.TimeoutExpired as e:
+        def text(b):
+            return b.decode(errors="replace") if isinstance(b, bytes) else (b or "")
+        rc, out, err, hung = 124, text(e.stdout), text(e.stderr), True
+    after = snapshot(skip)
+    stray = sorted(k for k in after if before.get(k) != after[k])
+    stray += sorted(k for k in before if k not in after)
+    (d / f"{n}.out").write_text(out)
+    (d / f"{n}.err").write_text(err)
+    (d / f"{n}.res").write_text(json.dumps(
+        {"rc": rc, "hung": hung, "dur": round(time.time() - t, 3), "stray": stray}))
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    print(f"[step {n} rc={rc}]", flush=True)
+    (d / f"{n}.done").touch()
+
+
+# --------------------------------------------------------------------------
+# sessions
+# --------------------------------------------------------------------------
+
+class Run:
+    """One harness run: a private tmux socket, a run dir, a stub server.
+    Everything it starts is recorded here and torn down by `close`."""
+
+    def __init__(self, evidence, timeout):
+        self.evidence = Path(evidence)
+        self.evidence.mkdir(parents=True, exist_ok=True)
+        self.timeout = timeout
+        tag = hashlib.sha1(str(CO).encode()).hexdigest()[:8]
+        self.socket = f"scholia-verify-{tag}-{os.getpid()}"
+        self.root = Path(tempfile.mkdtemp(prefix="scholia-verify-"))
+        self.stub = None
+        self.stub_url = None
+        self.sessions = []
+
+    def tmux(self, *args, check=True):
+        return subprocess.run(["tmux", "-L", self.socket, *args], check=check,
+                              capture_output=True, text=True)
+
+    def session(self, name, work):
+        home = self.root / name / "home"
+        block = self.root / name / "block" / "fastembed"
+        for p in (home / ".local/bin", block, self.root / name / "tmp", work):
+            p.mkdir(parents=True, exist_ok=True)
+        for b in ("scholia", "scholia-eval"):
+            link = home / ".local/bin" / b
+            if not link.exists():
+                link.symlink_to(BIN / b)
+        (block / "__init__.py").write_text(
+            'raise ImportError("fastembed blocked by verify: no model downloads")\n')
+        env = {"HOME": str(home), "TMPDIR": str(self.root / name / "tmp") + "/",
+               "PATH": f"{home}/.local/bin:" + os.environ.get("PATH", "/usr/bin:/bin"),
+               "PYTHONPATH": str(block.parent), "PYTHONDONTWRITEBYTECODE": "1",
+               "LANG": "en_US.UTF-8", "TERM": "xterm-256color",
+               "SEED": str(SEED), "CO": str(CO), "PS1": "verify$ "}
+        envargs = [f"{k}={v}" for k, v in env.items()]
+        self.tmux("new-session", "-d", "-s", name, "-x", "200", "-y", "50",
+                  "-c", str(work), "env", "-i", *envargs, "sh")
+        self.sessions.append(name)
+        if not getattr(self, "socket_path", None):
+            self.socket_path = self.tmux("display-message", "-p", "-t", name,
+                                         "#{socket_path}").stdout.strip()
+        log = self.evidence / f"{name}.transcript.log"
+        self.tmux("pipe-pane", "-t", name, "-o", f"cat >> '{log}'")
+        return name
+
+    def start_stub(self):
+        code = r'''
+import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def go(self, body):
+        codes = {"/ok": 200, "/gone": 404, "/forbidden": 403, "/boom": 500,
+                 "/nohead": 405 if self.command == "HEAD" else 200}
+        self.send_response(codes.get(self.path, 404))
+        self.send_header("Content-Length", "2"); self.end_headers()
+        if body: self.wfile.write(b"ok")
+    def do_HEAD(self): self.go(False)
+    def do_GET(self): self.go(True)
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+print(s.server_address[1], flush=True)
+s.serve_forever()
+'''
+        self.stub = subprocess.Popen([sys.executable, "-c", code],
+                                     stdout=subprocess.PIPE, text=True)
+        port = self.stub.stdout.readline().strip()
+        if not port.isdigit():
+            raise SystemExit("verify: the linkcheck stub server did not start")
+        self.stub_url = f"http://127.0.0.1:{port}"
+        (self.evidence / "stub.pid").write_text(str(self.stub.pid))
+
+    def drive(self, name, n, spec, stepdir):
+        spec = dict(spec, evidence=str(self.evidence))
+        if self.stub_url:
+            spec["cmd"] = spec["cmd"].replace("{S}", self.stub_url)
+        (stepdir / f"{n}.json").write_text(json.dumps(spec))
+        line = (f"{sys.executable} '{Path(__file__).resolve()}' _step "
+                f"'{stepdir}' {n} {self.timeout}")
+        self.tmux("send-keys", "-t", name, "-l", line)
+        self.tmux("send-keys", "-t", name, "Enter")
+        deadline = time.time() + self.timeout + 15
+        done = stepdir / f"{n}.done"
+        while not done.exists():  # a condition with a deadline, not a sleep
+            if time.time() > deadline:
+                return None
+            time.sleep(0.05)
+        return json.loads((stepdir / f"{n}.res").read_text())
+
+    def close(self):
+        for s in self.sessions:
+            self.tmux("kill-session", "-t", s, check=False)
+        self.tmux("kill-server", check=False)  # our private socket only
+        sp = getattr(self, "socket_path", "")
+        if sp and Path(sp).name == self.socket and Path(sp).is_socket():
+            Path(sp).unlink()  # tmux can leave the socket file behind
+        if self.stub and self.stub.poll() is None:
+            self.stub.terminate()
+            try:
+                self.stub.wait(5)
+            except subprocess.TimeoutExpired:
+                self.stub.kill()
+        subprocess.run(["chmod", "-R", "u+rwx", str(self.root)], capture_output=True)
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def check(spec, res, out, err):
+    """The invariant breaches and expectation misses for one step."""
+    fails, leads = [], []
+    if res is None:
+        return ["INV-HANG (driver deadline)"], leads
+    text = out + err
+    if res["hung"]:
+        fails.append("INV-HANG")
+    if CRASH.search(err):
+        fails.append("INV-CRASH")
+    rc, want = res["rc"], spec["rc"]
+    if want == 0 and rc != 0:
+        fails.append(f"INV-EXIT (rc {rc}, want 0)")
+    elif want == "nonzero" and rc == 0:
+        fails.append("INV-EXIT (rc 0, want non-zero)")
+    elif isinstance(want, int) and want != 0 and rc != want:
+        fails.append(f"INV-EXIT (rc {rc}, want {want})")
+    if rc != 0 and not err.strip() and not out.strip():
+        fails.append("INV-EXIT (failed silently)")
+    if not text.strip():
+        leads.append("INV-SILENT")
+    if res["stray"]:
+        fails.append(f"INV-STRAY {res['stray'][:3]}")
+    for w in spec["want"]:
+        if w not in text:
+            fails.append(f"missing {w!r}")
+    for w in spec["deny"]:
+        if w in text:
+            fails.append(f"unexpected {w!r}")
+    return fails, leads
+
+
+def verify(names, args):
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    evidence = Path(args.evidence or HERE / ".evidence" / stamp)
+    run = Run(evidence, args.timeout)
+    results = []
+
+    def stop(signum, frame):
+        run.close()
+        sys.exit(130)
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        if "linkcheck" in names:
+            run.start_stub()
+        for feat in names:
+            title, steps = SPEC[feat]
+            work = run.root / feat / "work"
+            stepdir = evidence / feat
+            stepdir.mkdir(parents=True, exist_ok=True)
+            main = run.session(f"{feat}-1", work)
+            fresh_n = 0
+            print(f"== {feat}: {title}")
+            for i, spec in enumerate(steps, 1):
+                name = main
+                if spec["fresh"]:
+                    fresh_n += 1
+                    name = run.session(f"{feat}-fresh{fresh_n}", work)
+                res = run.drive(name, i, spec, stepdir)
+                out = (stepdir / f"{i}.out").read_text() if res else ""
+                err = (stepdir / f"{i}.err").read_text() if res else ""
+                fails, leads = check(spec, res, out, err)
+                mark = "FAIL" if fails else "ok  "
+                print(f"  {mark} {i:2d}. {spec['say']}"
+                      + (f"  [{'; '.join(fails + leads)}]" if fails or leads else ""))
+                results.append({"feature": feat, "step": i, "say": spec["say"],
+                                "cmd": spec["cmd"], "rc": res and res["rc"],
+                                "fails": fails, "leads": leads})
+                if spec["fresh"]:
+                    run.tmux("kill-session", "-t", name, check=False)
+                    run.sessions.remove(name)
+            run.tmux("kill-session", "-t", main, check=False)
+            run.sessions.remove(main)
+    finally:
+        run.close()
+    failed = [r for r in results if r["fails"]]
+    summary = {"result": "fail" if failed else "pass", "features": names,
+               "steps": len(results), "failed": len(failed),
+               "silent_leads": sum(1 for r in results if r["leads"]),
+               "evidence": str(evidence)}
+    (evidence / "summary.json").write_text(json.dumps(
+        {"summary": summary, "steps": results}, indent=1))
+    print("VERIFY " + json.dumps(summary))
+    return 1 if failed else 0
+
+
+# --------------------------------------------------------------------------
+# doctor
+# --------------------------------------------------------------------------
+
+def doctor(args):
+    problems, facts = [], []
+
+    def need(ok, fact, fix):
+        (facts if ok else problems).append(fact if ok else f"{fact} -- {fix}")
+
+    need(sys.version_info >= (3, 11), f"python {sys.version.split()[0]}",
+         "scholia needs Python 3.11+ (tomllib)")
+    try:
+        sqlite3.connect(":memory:").execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+        need(True, "sqlite has FTS5", "")
+    except sqlite3.Error:
+        need(False, "sqlite has no FTS5", "use a Python whose sqlite3 has FTS5")
+    need(shutil.which("tmux") is not None, "tmux on PATH",
+         "install tmux; every drive runs in its own tmux session")
+    need(shutil.which("git") is not None, "git on PATH", "install git (template copy uses git archive)")
+    for b in ("scholia", "scholia-eval"):
+        p = BIN / b
+        need(p.is_file() and os.access(p, os.X_OK), f"{p} is this checkout's and executable",
+             f"chmod +x {p}")
+    h = hashlib.sha1((BIN / "scholia").read_bytes()).hexdigest()[:12]
+    head = subprocess.run(["git", "-C", str(CO), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    dirty = subprocess.run(["git", "-C", str(CO), "status", "--porcelain", "--", "bin"],
+                           capture_output=True, text=True).stdout.strip()
+    facts.append(f"checkout {CO} @ {head or '?'}{' (bin/ modified)' if dirty else ''}; "
+                 f"bin/scholia sha1 {h}")
+    for rel in ("vault/sources", "vault/notes", "vault/eval/queries.tsv",
+                "projects", "plan-history/history.md"):
+        need((SEED / rel).exists(), f"seed demo/seed/{rel}", "restore demo/seed/ from git")
+    facts.append(f"{sum(len(s) for _, s in SPEC.values())} steps in {len(SPEC)} features")
+    missing = [f for f in SPEC if not (FEATURES / f"{f}.md").is_file()]
+    need(not missing, "every feature has a verify/features/<name>.md",
+         f"write {', '.join(missing)}")
+    if os.environ.get("SCHOLIA_VAULT"):
+        facts.append(f"SCHOLIA_VAULT is set in your shell ({os.environ['SCHOLIA_VAULT']}); "
+                     "drives unset it, so it is never touched")
+    tmpdir = Path(tempfile.gettempdir())
+    old = sorted(p.name for p in tmpdir.glob("scholia-verify-*"))
+    if old:
+        facts.append(f"{len(old)} scholia-verify-* run dir(s) in {tmpdir} from interrupted "
+                     f"runs (not this run's; delete by name if unwanted): {', '.join(old[:5])}")
+    try:
+        probe = HERE / ".evidence"
+        probe.mkdir(exist_ok=True)
+        need(os.access(probe, os.W_OK), f"evidence dir {probe} writable", "fix its permissions")
+    except OSError as e:
+        need(False, "evidence dir", str(e))
+    for f in facts:
+        print(f"  ok   {f}")
+    for p in problems:
+        print(f"  FIX  {p}")
+    ok = not problems
+    print("DOCTOR " + json.dumps({"result": "ok" if ok else "fix", "problems": len(problems)}))
+    return 0 if ok else 1
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "_step":  # internal: inside tmux
+        run_step(sys.argv[2], sys.argv[3], float(sys.argv[4]))
+        return 0
+    p = argparse.ArgumentParser(
+        prog="verify/verify", description=__doc__.split("\n\n")[0],
+        epilog="Feature areas: " + ", ".join(SPEC) + ". Evidence goes to "
+               "--evidence DIR (default verify/.evidence/<UTC stamp>/), never deleted.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("doctor", help="preflight; says what to fix")
+    sub.add_parser("list", help="feature areas in sweep order")
+    v = sub.add_parser("verify", help="drive one feature, or all")
+    v.add_argument("feature", nargs="?", help="one of: " + ", ".join(SPEC))
+    v.add_argument("--evidence", metavar="DIR", help="where proof is kept")
+    v.add_argument("--timeout", type=float, default=30.0,
+                   help="seconds per command before INV-HANG (default 30)")
+    args = p.parse_args()
+    if args.cmd == "doctor":
+        return doctor(args)
+    if args.cmd == "list":
+        for k, (title, steps) in SPEC.items():
+            print(f"  {k:<13} {len(steps):2d} steps  {title}")
+        return 0
+    if args.feature and args.feature not in SPEC:
+        print(f"verify: unknown feature {args.feature!r}; run `verify/verify list`",
+              file=sys.stderr)
+        return 2
+    if shutil.which("tmux") is None:
+        print("verify: tmux not found; run `verify/verify doctor`", file=sys.stderr)
+        return 2
+    return verify([args.feature] if args.feature else list(SPEC), args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
