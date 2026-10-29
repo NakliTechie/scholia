@@ -635,12 +635,39 @@ def load_embedder():
     return TextEmbedding(EMB_MODEL, cache_dir=str(MODEL_DIR))
 
 
+def open_embeddings():
+    """The passage-vector cache. When it cannot be written (a read-only
+    vault), work on an in-memory copy for this run, seeded from the file
+    when one is there, so only passages it lacks are embedded."""
+    writable = (os.access(EMB_PATH.parent, os.W_OK)
+                and (not EMB_PATH.exists() or os.access(EMB_PATH, os.W_OK)))
+    if writable:
+        try:
+            emb = sqlite3.connect(EMB_PATH, timeout=30)
+            emb.execute("CREATE TABLE IF NOT EXISTS vec (h TEXT PRIMARY KEY, v BLOB)")
+            return emb
+        except sqlite3.OperationalError:
+            pass
+    print(f"scholia: cannot write the embeddings {EMB_PATH}; "
+          "using an in-memory copy for this run", file=sys.stderr)
+    emb = sqlite3.connect("file::memory:", uri=True)
+    emb.execute("CREATE TABLE vec (h TEXT PRIMARY KEY, v BLOB)")
+    if EMB_PATH.exists():
+        try:
+            emb.execute("ATTACH ? AS f", (f"file:{EMB_PATH}?mode=ro",))
+            emb.execute("INSERT OR IGNORE INTO vec SELECT h, v FROM f.vec")
+            emb.commit()
+            emb.execute("DETACH f")
+        except sqlite3.Error:
+            pass  # unreadable or not ours: embed everything
+    return emb
+
+
 def semantic_index(db, model, verbose=False):
     """Sync the passage-embedding cache with the notes; return
     (note_ids, anchors, texts, matrix). Only unseen passages are embedded."""
     import numpy as np
-    emb = sqlite3.connect(EMB_PATH, timeout=30)
-    emb.execute("CREATE TABLE IF NOT EXISTS vec (h TEXT PRIMARY KEY, v BLOB)")
+    emb = open_embeddings()
     rows = []
     for nid, title, tldr, body in db.execute(
             "SELECT id,title,tldr,body FROM notes"):

@@ -66,6 +66,15 @@ check "read-only vault: search works"            "example-paper"           "$S" 
 check "read-only vault: one stderr note"         "using an in-memory index" "$S" --vault "$v" search copyleft
 check "read-only vault: build refuses"           "make the vault folder writable" "$S" --vault "$v" build
 chmod u+w "$v"
+# the same for `semantic`, only when fastembed and its model are already here (no download)
+if python3 -c "import fastembed" 2>/dev/null && [ -d "$HOME/.cache/scholia/models" ]; then
+  rm -f "$v/.scholia.db" "$v/.scholia.emb.db"; chmod a-w "$v"
+  check "read-only vault: semantic works"        "example-paper"           "$S" --vault "$v" semantic copyleft
+  check "read-only vault: semantic stderr note"  "in-memory copy"          "$S" --vault "$v" semantic copyleft
+  chmod u+w "$v"
+else
+  echo "skip read-only semantic checks (fastembed or its model is not installed)"
+fi
 check "related finds the linked note" "licensing-notes" "$S" --vault "$v" related 2026-01-01-example-paper
 check "orient reports a known url"   "ALREADY CAPTURED" "$S" --vault "$v" orient https://example.com/paper
 check "orient finds a url among extra words" "ALREADY CAPTURED" "$S" --vault "$v" orient https://example.com/paper Example Paper licensing
