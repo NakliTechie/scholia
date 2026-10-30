@@ -700,6 +700,8 @@ def semantic_index(db, model, verbose=False):
     if stale:  # drop vectors for passages that no longer exist
         emb.executemany("DELETE FROM vec WHERE h=?", [(h,) for h in stale])
         emb.commit()
+    if not rows:  # a vault with no notes: nothing to compare against
+        return [], [], [], None
     vec = dict(emb.execute("SELECT h, v FROM vec"))
     mat = np.stack([np.frombuffer(vec[r[3]], dtype=np.float32) for r in rows])
     mat /= np.linalg.norm(mat, axis=1, keepdims=True) + 1e-9
@@ -710,6 +712,8 @@ def semantic_scores(db, model, text, verbose=False):
     """Best passage cosine per note id: {nid: (score, anchor, passage)}."""
     import numpy as np
     ids, anchors, texts, mat = semantic_index(db, model, verbose)
+    if not ids:
+        return {}
     q = np.asarray(next(iter(model.embed([text]))), dtype=np.float32)
     sims = mat @ (q / (np.linalg.norm(q) + 1e-9))
     best = {}

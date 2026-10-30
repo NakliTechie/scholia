@@ -186,6 +186,8 @@ if (HOST_VENV / "bin" / "python3").exists() and any(
     SPEC["semantic"] = ("meaning search, through this host's semantic venv and cached model (offline)", SPEC["semantic"][1] + [
         step("semantic through scholia's venv", f"cd v && {REAL} scholia semantic which licence is most common", 0, ["nearest by meaning", "example-paper"]),
         step("related --semantic blends embeddings", f"cd v && {REAL} scholia related licence --semantic", 0, ["gpl-history"], ["--semantic ignored"]),
+        step("semantic on a vault with no notes finds nothing, no traceback", f"mkdir t && git -C \"$CO\" archive HEAD template | tar -x -C t --strip-components=1 && cd t && {REAL} scholia semantic licence", 0, ["0 nearest by meaning"]),
+        step("related --semantic on a vault with no notes", f"cd t && {REAL} scholia related licence --semantic", 0),
         step("semantic in a read-only vault uses in-memory copies", f"rm -f v/.scholia.db v/.scholia.emb.db && chmod a-w v && cd v && {REAL} scholia semantic copyleft; e=$?; chmod u+w .; exit $e", 0, ["in-memory index", "in-memory copy", "nearest by meaning"]),
     ])
 

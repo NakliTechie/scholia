@@ -26,6 +26,7 @@
 - **/capture-nt:** Step 9 now ends by deleting the capture's own temp files (downloads, extracts, images, scripts in the scratchpad or `/tmp`) once the commit lands; the `assets/` copy is the one kept. The confirm echo gains a `cleaned:` line. A sweep on 2026-10-09 found 621 leftover files (34 PDFs, ~220 MB) from 47 capture sessions, 27 of them byte-identical to files in `assets/`.
 
 ### Fixed
+- **`semantic` on a vault with no notes.** `semantic`, `related --semantic` and `orient --semantic` raised `ValueError: need at least one array to stack` on a fresh template vault; they now report no matches. Found by a `/walkthrough-nt map` source pass; 2 harness steps pin it.
 - **orient:** the duplicate check now matches a note's `alt_urls` as well as its `url`. A tweet or repo filed under its paper (the vault's canonical-capture rule) used to read as a new capture. A new `urls` table holds every URL a note answers for.
 - **orient:** x.com links drop their query string (`?s=46&t=…` is share tracking), and `twitter.com` / `mobile.twitter.com` map to `x.com`. 4 new smoke checks (39 total).
 - **orient:** `alt_urls` written as a YAML block list (`- url` lines) is read too. 1 new smoke check (40 total).
