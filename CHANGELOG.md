@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- **`scholia-eval` uses the semantic venv too.** It re-runs under scholia's semantic venv when the running Python lacks fastembed, so the `semantic` and `related+sem` rows are scored (on the demo seed: recall@10 1.000 against 0.833 for `search`). A harness step pins it.
+
 - **The semantic extra lives in its own venv.** Installing `requirements-semantic.txt` into a shared Python upgraded about 20 of its packages and broke other tools' pins. `scholia` now looks for a private venv (`~/.local/share/scholia/venv`, or `$SCHOLIA_VENV`); when the running Python lacks fastembed and that venv exists, `semantic`, `related --semantic` and `orient --semantic` re-run under the venv's interpreter, once. The install hint and the README give the two setup commands. 2 new smoke checks, plus one that runs only when the venv is present (66 total on a machine with the venv and model).
 
 - **A read-only vault is searchable.** When `.scholia.db` cannot be written (a read-only vault, or a directory at that path), every read command builds the index in memory for that run and prints one stderr line naming the path; before, it exited 2. The cost is a full build on every run, because nothing is cached. `scholia build` still exits 2 there, since its job is to write the index. `semantic` does the same for its embeddings file: it works on an in-memory copy, seeded from the file when one exists, so only missing passages are embedded. 5 new smoke checks (64 total; the 2 semantic ones run only when fastembed and its model are installed); the walkthrough harness covers both cases and the `build` refusal (66 steps).

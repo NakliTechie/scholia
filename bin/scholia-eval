@@ -7,7 +7,8 @@ Two measurements, both run on the live vault:
             (tab-separated: question, then space-separated slugs).
             Recall@10 and MRR@10 for each retrieval method the loaded
             engine offers: `search`, `related "<free text>"`, and, when
-            fastembed is installed, `semantic` and `related --semantic`.
+            fastembed is installed or scholia's semantic venv exists,
+            `semantic` and `related --semantic`.
   related   For every notes/ file, `related` with the graph term switched
             off (text + tags only), scored against the note's own in-vault
             links. Links are held out of the score, so they are a fair
@@ -201,6 +202,19 @@ def run_pool(v, db, queries):
             print(f"  GOLD {s:<60} (retrieved by no method)")
 
 
+def use_semantic_venv(core):
+    """Re-run under scholia's semantic venv, as `scholia` does, when this
+    Python lacks fastembed and the venv exists, so the semantic methods are
+    scored. Once only: the venv run never re-execs."""
+    if importlib.util.find_spec("fastembed") is not None:
+        return
+    py = core.SEMANTIC_VENV / "bin" / "python3"
+    if not py.exists() or os.environ.get("SCHOLIA_IN_VENV"):
+        return
+    os.environ["SCHOLIA_IN_VENV"] = "1"
+    os.execv(py, [str(py), str(Path(__file__).resolve()), *sys.argv[1:]])
+
+
 def main():
     p = argparse.ArgumentParser(prog="scholia-eval")
     p.add_argument("--vault", help="vault directory (default: as scholia)")
@@ -211,6 +225,7 @@ def main():
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args()
     core = load_impl(HOME / "bin/scholia")
+    use_semantic_venv(core)
     vault = core.find_vault(args.vault)
     if vault is None:
         print("no vault found: pass --vault DIR or set SCHOLIA_VAULT",

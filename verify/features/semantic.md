@@ -4,4 +4,4 @@
 - **How a user reaches it:** the two README commands that create the venv, then `scholia semantic <text>` inside a vault (or with `--vault`). Without the venv: `uv run --no-project --with-requirements requirements-semantic.txt bin/scholia --vault <dir> semantic <text>`.
 - **Drive it:** `verify/verify verify semantic`. It always drives the missing-fastembed path (exit 3 with the install hint; `--semantic` falls back with a note). When this host already has the venv and the model on disk, it also drives the embedding path offline (`HF_HUB_OFFLINE=1`), `related --semantic`, and a read-only vault.
 - **Unreachable without the venv and model:** the embedding path. Prerequisite: scholia's venv and the model already in `~/.cache/scholia/models`; the harness never downloads. Route attempted: `scholia semantic licence` with fastembed blocked.
-- **What usually lies:** `scholia-eval` does not use the venv; it scores the semantic method only when the Python running it has fastembed.
+- **What usually lies:** `scholia-eval` uses the same venv; with neither fastembed nor the venv it scores `search` and `related` only, with no note.

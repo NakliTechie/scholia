@@ -190,6 +190,9 @@ if (HOST_VENV / "bin" / "python3").exists() and any(
         step("related --semantic on a vault with no notes", f"cd t && {REAL} scholia related licence --semantic", 0),
         step("semantic in a read-only vault uses in-memory copies", f"rm -f v/.scholia.db v/.scholia.emb.db && chmod a-w v && cd v && {REAL} scholia semantic copyleft; e=$?; chmod u+w .; exit $e", 0, ["in-memory index", "in-memory copy", "nearest by meaning"]),
     ])
+    SPEC["eval"] = (SPEC["eval"][0], SPEC["eval"][1] + [
+        step("scholia-eval scores the semantic methods through the venv", f"cd v && {REAL} scholia-eval", 0, ["semantic", "related+sem"]),
+    ])
 
 
 # --------------------------------------------------------------------------
