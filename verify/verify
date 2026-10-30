@@ -173,6 +173,22 @@ SPEC = {
     ]),
 }
 
+# The embedding path, driven only when this host already has scholia's semantic
+# venv and the model on disk: the drive then reads them in place, offline, and
+# never downloads. INV-STRAY still watches ~/.cache/scholia for writes.
+HOST_VENV = Path(os.environ.get(
+    "SCHOLIA_VENV", Path.home() / ".local" / "share" / "scholia" / "venv"))
+HOST_MODELS = REAL_CACHE / "models"
+if (HOST_VENV / "bin" / "python3").exists() and any(
+        HOST_MODELS.glob("models--*all-MiniLM-L6-v2*")):
+    REAL = (f"env -u PYTHONPATH SCHOLIA_VENV='{HOST_VENV}' "
+            f"SCHOLIA_MODEL_DIR='{HOST_MODELS}' HF_HUB_OFFLINE=1")
+    SPEC["semantic"] = ("meaning search, through this host's semantic venv and cached model (offline)", SPEC["semantic"][1] + [
+        step("semantic through scholia's venv", f"cd v && {REAL} scholia semantic which licence is most common", 0, ["nearest by meaning", "example-paper"]),
+        step("related --semantic blends embeddings", f"cd v && {REAL} scholia related licence --semantic", 0, ["gpl-history"], ["--semantic ignored"]),
+        step("semantic in a read-only vault uses in-memory copies", f"rm -f v/.scholia.db v/.scholia.emb.db && chmod a-w v && cd v && {REAL} scholia semantic copyleft; e=$?; chmod u+w .; exit $e", 0, ["in-memory index", "in-memory copy", "nearest by meaning"]),
+    ])
+
 
 # --------------------------------------------------------------------------
 # the step runner, executed inside the tmux session
@@ -444,6 +460,8 @@ def doctor(args):
     need(shutil.which("tmux") is not None, "tmux on PATH",
          "install tmux; every drive runs in its own tmux session")
     need(shutil.which("git") is not None, "git on PATH", "install git (template copy uses git archive)")
+    need(shutil.which("sqlite3") is not None, "sqlite3 on PATH",
+         "install the sqlite3 command; the freshness drive reads the index with it")
     for b in ("scholia", "scholia-eval"):
         p = BIN / b
         need(p.is_file() and os.access(p, os.X_OK), f"{p} is this checkout's and executable",

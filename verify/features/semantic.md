@@ -1,6 +1,7 @@
 # semantic
 
-- **What exists:** `scholia semantic <text>` and `--semantic` on `related` and `orient`, through fastembed and the `all-MiniLM-L6-v2` encoder (~90 MB, downloaded once to `~/.cache/scholia/models`).
-- **How a user reaches it:** `uv run --with-requirements requirements-semantic.txt bin/scholia semantic ...`.
-- **Drive it:** `verify/verify verify semantic` drives only the missing-fastembed path (exit 3 with the install hint; `--semantic` falls back with a note).
-- **Unreachable:** the embedding path itself. Prerequisite: fastembed installed and the model downloaded, which the harness forbids (no downloads, shared GPU machine). Route attempted: `scholia semantic licence` with fastembed blocked.
+- **What exists:** `scholia semantic <text>` and `--semantic` on `related` and `orient`, through fastembed and the `all-MiniLM-L6-v2` encoder (~90 MB, fetched on first use into `~/.cache/scholia/models`, or `$SCHOLIA_MODEL_DIR`). It runs on CPU (`onnxruntime`). When the running Python lacks fastembed and scholia's venv exists (`~/.local/share/scholia/venv`, or `$SCHOLIA_VENV`), these commands re-run once under the venv's Python. In a read-only vault the embeddings are kept in an in-memory copy, seeded from `.scholia.emb.db` when it exists.
+- **How a user reaches it:** the two README commands that create the venv, then `scholia semantic <text>` inside a vault (or with `--vault`). Without the venv: `uv run --no-project --with-requirements requirements-semantic.txt bin/scholia --vault <dir> semantic <text>`.
+- **Drive it:** `verify/verify verify semantic`. It always drives the missing-fastembed path (exit 3 with the install hint; `--semantic` falls back with a note). When this host already has the venv and the model on disk, it also drives the embedding path offline (`HF_HUB_OFFLINE=1`), `related --semantic`, and a read-only vault.
+- **Unreachable without the venv and model:** the embedding path. Prerequisite: scholia's venv and the model already in `~/.cache/scholia/models`; the harness never downloads. Route attempted: `scholia semantic licence` with fastembed blocked.
+- **What usually lies:** `scholia-eval` does not use the venv; it scores the semantic method only when the Python running it has fastembed.

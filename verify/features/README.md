@@ -14,8 +14,10 @@ Read by the next `/walkthrough-nt`, `/autopilot-nt` and `/guide-nt`. Each file s
 | [linkcheck](linkcheck.md) | `scholia linkcheck` (network) | `verify/verify verify linkcheck` |
 | [eval](eval.md) | `scholia-eval` | `verify/verify verify eval` |
 | [index-faults](index-faults.md) | index and config on a hostile disk | `verify/verify verify index-faults` |
-| [semantic](semantic.md) | `scholia semantic`, `--semantic` | partly unreachable |
+| [semantic](semantic.md) | `scholia semantic`, `--semantic` | `verify/verify verify semantic` (embedding path only with the host venv and model) |
 | [freshness](freshness.md) | skip-rebuild and read-back | `verify/verify verify freshness` |
+
+The harness needs Python 3.11+ with SQLite FTS5, `tmux`, `git` and `sqlite3`; `verify/verify doctor` checks each.
 
 Roles: the **anonymous visitor** (no vault, no `SCHOLIA_VAULT`), the **brand-new user** (a template copy with no notes), the **vault owner** (the demo seed), the **plan-only user** (`history`, no vault). scholia has no auth, so there is no privileged role; the nearest guard is that nothing writes outside the vault.
 
